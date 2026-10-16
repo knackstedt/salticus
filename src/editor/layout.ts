@@ -12,6 +12,7 @@
 import { RunCache, type RunShape } from "../text/run-cache";
 import { faceKey } from "../text/fonts";
 import { blockBaseStyle, blockText, type Block, type Doc, type DocPos, type TextStyle } from "./model";
+import { highlightLine, type SyntaxPalette } from "./highlight";
 
 export interface LaidSegment {
   /** Pen x of this slice within the line (doc space). */
@@ -230,6 +231,28 @@ export class DocLayouter {
     let off = 0;
     for (const span of block.spans) {
       const style = resolveStyle(block, span.style, theme);
+      if (block.kind === "codeblock" && span.text) {
+        // Syntax-highlight: split the span into colored sub-spans. Line
+        // boundaries (\n) stay as their own spans so the tokenizer sees them.
+        const lines = span.text.split("\n");
+        for (let li = 0; li < lines.length; li++) {
+          const lineText = lines[li]!;
+          const subs = highlightLine(lineText, block.lang, style, theme.syntax);
+          for (const sub of subs) {
+            const fk = faceKey(sub.style.family, sub.style.weight, sub.style.italic ? "italic" : "normal");
+            const shape = sub.text ? this.cache.getRun(fk, sub.style.sizePx, sub.text) : null;
+            runs.push({ shape, text: sub.text, style: sub.style, faceKey: fk, sizePx: sub.style.sizePx, blockOff: off });
+            off += sub.text.length;
+          }
+          if (li < lines.length - 1) {
+            const fk = faceKey(style.family, style.weight, style.italic ? "italic" : "normal");
+            const shape = this.cache.getRun(fk, style.sizePx, "\n");
+            runs.push({ shape, text: "\n", style, faceKey: fk, sizePx: style.sizePx, blockOff: off });
+            off += 1;
+          }
+        }
+        continue;
+      }
       const fk = faceKey(style.family, style.weight, style.italic ? "italic" : "normal");
       const shape = span.text ? this.cache.getRun(fk, style.sizePx, span.text) : null;
       runs.push({ shape, text: span.text, style, faceKey: fk, sizePx: style.sizePx, blockOff: off });
@@ -387,4 +410,5 @@ export interface EditorTheme {
   quoteBar: Rgba;
   divider: Rgba;
   bulletColor: Rgba;
+  syntax: SyntaxPalette;
 }
