@@ -12,8 +12,10 @@ import { store } from "./store";
 import { loadPageContent, savePageContent } from "./workspace";
 import type { EditorSurface } from "../editor/surface";
 import type { KanbanSurface } from "../board/surface";
+import type { WhiteboardSurface } from "../wb/surface";
 import { newBlockId, type Doc } from "../editor/model";
 import { demoBoard, type BoardContent } from "../board/model";
+import { demoWhiteboard, type WbContent } from "../wb/model";
 
 const log = createLogger();
 const SAVE_MS = 700;
@@ -21,6 +23,7 @@ const SAVE_MS = 700;
 export interface ViewSurfaces {
   editor: EditorSurface;
   kanban: KanbanSurface;
+  whiteboard: WhiteboardSurface;
 }
 
 export function installPageController(views: ViewSurfaces): () => void {
@@ -28,6 +31,7 @@ export function installPageController(views: ViewSurfaces): () => void {
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
   let pendingDoc: Doc | null = null;
   let pendingBoard: BoardContent | null = null;
+  let pendingWb: WbContent | null = null;
 
   const flushSave = () => {
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
@@ -37,6 +41,10 @@ export function installPageController(views: ViewSurfaces): () => void {
     if (p?.type === "board" && pendingBoard) {
       savePageContent(currentId, { type: "board", board: pendingBoard });
       pendingBoard = null;
+      store.setState({ saveIndicator: "saved" });
+    } else if (p?.type === "whiteboard" && pendingWb) {
+      savePageContent(currentId, { type: "whiteboard", wb: pendingWb });
+      pendingWb = null;
       store.setState({ saveIndicator: "saved" });
     } else if (pendingDoc) {
       savePageContent(currentId, { type: "doc", doc: pendingDoc });
@@ -61,14 +69,24 @@ export function installPageController(views: ViewSurfaces): () => void {
     saveTimer = setTimeout(flushSave, SAVE_MS);
   };
 
+  const scheduleWbSave = () => {
+    if (!currentId) return;
+    pendingWb = views.whiteboard.getContent();
+    store.setState({ saveIndicator: "saving" });
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(flushSave, SAVE_MS);
+  };
+
   views.editor.onChange = scheduleDocSave;
   views.kanban.onChange = scheduleBoardSave;
+  views.whiteboard.onChange = scheduleWbSave;
 
   const routeViews = () => {
     const s = store.getState();
     const p = s.activePageId ? s.pages[s.activePageId] : null;
     views.editor.setActive(!p || p.type === "doc");
     views.kanban.setActive(p?.type === "board");
+    views.whiteboard.setActive(p?.type === "whiteboard");
   };
 
   const loadInto = (id: string | null) => {
@@ -78,24 +96,26 @@ export function installPageController(views: ViewSurfaces): () => void {
       views.editor.setDoc({ blocks: [{ id: newBlockId(), kind: "paragraph", spans: [] }] });
       views.editor.setActive(true);
       views.kanban.setActive(false);
+      views.whiteboard.setActive(false);
       return;
     }
     const c = loadPageContent(id!);
     if (p.type === "board") {
       const board = (c?.board as BoardContent | undefined) ?? demoBoard();
       views.kanban.setBoard(board);
-      views.kanban.setActive(true);
-      views.editor.setActive(false);
       if (!c) scheduleBoardSave();
+    } else if (p.type === "whiteboard") {
+      const wb = (c?.wb as WbContent | undefined) ?? demoWhiteboard();
+      views.whiteboard.setContent(wb);
+      if (!c) scheduleWbSave();
     } else {
       if (c?.type === "doc" && c.doc?.blocks?.length) {
         views.editor.setDoc(c.doc);
       } else {
         views.editor.setDoc({ blocks: [{ id: newBlockId(), kind: "paragraph", spans: [] }] });
       }
-      views.editor.setActive(true);
-      views.kanban.setActive(false);
     }
+    routeViews();
   };
 
   // Initial load.

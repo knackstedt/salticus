@@ -7,6 +7,7 @@ import { newId, pageIcon, store, type PageMeta, type PageType } from "./store";
 import { newBlockId } from "../editor/model";
 import { savePageContent, deletePageFile } from "./workspace";
 import { newColumn, type BoardContent } from "../board/model";
+import { emptyWhiteboard, type WbContent } from "../wb/model";
 
 export function createPage(opts: { title?: string; type?: PageType; parentId?: string | null; open?: boolean } = {}): PageMeta {
   const s = store.getState();
@@ -35,16 +36,19 @@ export function createPage(opts: { title?: string; type?: PageType; parentId?: s
     patch.activePageId = id;
     patch.openTabs = s.openTabs.includes(id) ? s.openTabs : [...s.openTabs, id];
   }
-  store.setState(patch);
-  // Seed content file.
+  // Seed the content file BEFORE setState — the page controller's subscriber
+  // reacts to activePageId immediately and must find the seeded file.
   const board: BoardContent | undefined = meta.type === "board"
     ? { columns: [newColumn("To Do", 0), newColumn("In Progress", 1), newColumn("Done", 3)] }
     : undefined;
+  const wb: WbContent | undefined = meta.type === "whiteboard" ? emptyWhiteboard() : undefined;
   savePageContent(id, {
     type: meta.type,
     doc: meta.type === "doc" ? { blocks: [{ id: newBlockId(), kind: "paragraph", spans: [] }] } : undefined,
     board,
+    wb,
   });
+  store.setState(patch);
   return meta;
 }
 

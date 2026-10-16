@@ -9,6 +9,7 @@ import { store } from "./app/store";
 import { gameMcpTools } from "./mcp/tools";
 import { EditorSurface } from "./editor/surface";
 import { KanbanSurface } from "./board/surface";
+import { WhiteboardSurface } from "./wb/surface";
 import { RunCache } from "./text/run-cache";
 import { TextAtlas } from "./text/atlas";
 import { loadFaces } from "./text/fonts";
@@ -20,6 +21,7 @@ const log = createLogger();
 /** Live view surfaces — installed by the renderer module, read by MCP tools. */
 export let editorSurface: EditorSurface | null = null;
 export let kanbanSurface: KanbanSurface | null = null;
+export let wbSurface: WhiteboardSurface | null = null;
 let pageCtl: (() => void) | null = null;
 
 // ============================================================================
@@ -73,21 +75,26 @@ export const gameModule: GameModule = {
         const cache = new RunCache(atlas);
         const surf = new EditorSurface(mctx, cache);
         const board = new KanbanSurface(mctx, cache);
+        const wb = new WhiteboardSurface(mctx, cache);
         editorSurface = surf;
         kanbanSurface = board;
+        wbSurface = wb;
         surf.setRect(store.getState().contentRect);
         board.setRect(store.getState().contentRect);
+        wb.setRect(store.getState().contentRect);
         mctx.registerUiCompositor?.(surf);
         mctx.registerUiCompositor?.(board);
-        mctx.onFrame("afterFrame", (dt) => { surf.tick(dt); board.update(dt); });
+        mctx.registerUiCompositor?.(wb);
+        mctx.onFrame("afterFrame", (dt) => { surf.tick(dt); board.update(dt); wb.update(dt); });
         const unsub = store.subscribe((s) => {
           surf.setRect(s.contentRect);
           board.setRect(s.contentRect);
+          wb.setRect(s.contentRect);
         });
         void surf.init().then(async () => {
           const defs = await loadFaces();
           for (const def of defs) cache.registerFace(def);
-          pageCtl = installPageController({ editor: surf, kanban: board });
+          pageCtl = installPageController({ editor: surf, kanban: board, whiteboard: wb });
           surf.enableTextInput();
         }).catch((e) => log.warn("game", `editor init failed: ${e}`));
         mctx.onDispose(() => {
@@ -98,10 +105,12 @@ export const gameModule: GameModule = {
           flushNow();
           surf.dispose();
           board.dispose();
+          wb.dispose();
           cache.dispose();
           atlas.destroy();
           if (editorSurface === surf) editorSurface = null;
           if (kanbanSurface === board) kanbanSurface = null;
+          if (wbSurface === wb) wbSurface = null;
         });
       },
     };

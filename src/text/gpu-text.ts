@@ -14,6 +14,8 @@ import { TextAtlas, type AtlasRegion } from "./atlas";
 export const KIND_TEXT = 0;
 export const KIND_RECT = 1;
 export const KIND_ROUNDED = 2;
+export const KIND_CAPSULE = 3;
+export const KIND_ELLIPSE = 4;
 
 const FLOATS_PER_INSTANCE = 16; // 4 × vec4f
 const INITIAL_CAPACITY = 2048;
@@ -127,6 +129,27 @@ export class GpuTextPass {
   /** Rounded rectangle — code spans, chips, block backgrounds. */
   roundedRect(x: number, y: number, w: number, h: number, radius: number, color: Rgba): void {
     this.quad([x, y, w, h], [0, 0, 0, 0], color, [KIND_ROUNDED, radius, 0, 0]);
+  }
+
+  /** Capsule segment from (x0,y0) to (x1,y1), radius r — pen strokes, lines,
+   *  arrowheads. */
+  capsule(x0: number, y0: number, x1: number, y1: number, r: number, color: Rgba): void {
+    this.quad([x0, y0, x1, y1], [0, 0, 0, 0], color, [KIND_CAPSULE, r, 0, 0]);
+  }
+
+  /** Ellipse fill in a bounding box. */
+  ellipse(x: number, y: number, w: number, h: number, color: Rgba): void {
+    this.quad([x, y, w, h], [0, 0, 0, 0], color, [KIND_ELLIPSE, 0, 0, 0]);
+  }
+
+  /** Polyline as a capsule chain (screen-space points). */
+  stroke(pts: ArrayLike<number>, r: number, color: Rgba): void {
+    for (let i = 0; i + 3 < pts.length; i += 2) {
+      this.capsule(pts[i]!, pts[i + 1]!, pts[i + 2]!, pts[i + 3]!, r, color);
+    }
+    if (pts.length === 2) {
+      this.capsule(pts[0]!, pts[1]!, pts[0]! + 0.01, pts[1]! + 0.01, r, color);
+    }
   }
 
   get quadCount(): number {
