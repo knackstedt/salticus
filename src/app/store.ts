@@ -54,6 +54,8 @@ export interface AppState {
   wbVersion: number;
   paletteOpen: boolean;
   searchOpen: boolean;
+  /** Which pane the sidebar shows: the page tree, trash, or settings. */
+  sidebarView: "pages" | "trash" | "settings";
   /** Per-view runtime handles, installed by view modules. */
   worldState?: () => unknown;
   uiState?: () => unknown;
@@ -81,6 +83,7 @@ export const store = createStore<AppState>(() => ({
   wbVersion: 0,
   paletteOpen: false,
   searchOpen: false,
+  sidebarView: "pages",
 }));
 
 export function pageIcon(type: PageType): string {

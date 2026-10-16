@@ -87,6 +87,8 @@ export class EditorSurface implements ScreenUiCompositor {
   private history = new History();
   private slash: SlashState | null = null;
   private toolbar: ToolbarState | null = null;
+  /** View routing — the doc editor only renders/claims input for doc pages. */
+  private active = true;
 
   // Interaction state.
   caret: DocPos = { block: 0, offset: 0 };
@@ -108,11 +110,14 @@ export class EditorSurface implements ScreenUiCompositor {
 
   onChange: (() => void) | null = null;
 
-  constructor(private ctx: RendererModuleContext) {
+  private ownsCache: boolean;
+
+  constructor(private ctx: RendererModuleContext, sharedCache?: RunCache) {
     const device = ctx.getDevice();
     this.pass = new GpuTextPass(device, ctx.getFormat());
-    this.atlas = new TextAtlas(device, 2048);
-    this.cache = new RunCache(this.atlas);
+    this.ownsCache = !sharedCache;
+    this.cache = sharedCache ?? new RunCache(new TextAtlas(device, 2048));
+    this.atlas = this.cache.atlas;
     this.layouter = new DocLayouter(this.cache);
     this.theme = darkTheme();
     this.installInput();
@@ -137,6 +142,17 @@ export class EditorSurface implements ScreenUiCompositor {
   setTheme(theme: EditorTheme): void {
     this.theme = theme;
     this.dirty = true;
+  }
+
+  setActive(a: boolean): void {
+    if (this.active === a) return;
+    this.active = a;
+    if (!a) { this.focused = false; this.slash = null; this.toolbar = null; }
+    this.dirty = true;
+  }
+
+  get isActive(): boolean {
+    return this.active;
   }
 
   setRect(r: EditorRect): void {
@@ -203,6 +219,7 @@ export class EditorSurface implements ScreenUiCompositor {
   private installInput(): void {
     const bus = this.ctx.getInputBus();
     const inRect = (x: number, y: number) =>
+      this.active &&
       x >= this.rect.x && x <= this.rect.x + this.rect.w &&
       y >= this.rect.y && y <= this.rect.y + this.rect.h;
 
@@ -280,7 +297,7 @@ export class EditorSurface implements ScreenUiCompositor {
     }, 50));
 
     this.unsubs.push(bus.onKeyDown((e, ctrl) => {
-      if (!this.focused) return;
+      if (!this.focused || !this.active) return;
       if (this.handleKey(e)) ctrl.stopPropagation();
     }, 50));
   }
@@ -849,7 +866,7 @@ export class EditorSurface implements ScreenUiCompositor {
   }
 
   hasContent(): boolean {
-    return this.cache.ready && !this.disposed;
+    return this.active && this.cache.ready && !this.disposed;
   }
 
   render(pass: GPURenderPassEncoder, surfaceW: number, surfaceH: number): void {
@@ -1038,8 +1055,10 @@ export class EditorSurface implements ScreenUiCompositor {
     this.unsubs.forEach((u) => u());
     this.unsubs = [];
     this.textInputUnsub?.();
-    this.cache.dispose();
-    this.atlas.destroy();
+    if (this.ownsCache) {
+      this.cache.dispose();
+      this.atlas.destroy();
+    }
     this.pass.destroy();
   }
 }

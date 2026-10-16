@@ -1,54 +1,100 @@
 // ============================================================================
-// page-controller.ts — binds the editor surface to workspace pages.
+// page-controller.ts — binds view surfaces to workspace pages.
 //
-// The surface edits ONE doc: the active page's. Switching pages saves the
-// outgoing doc, loads the incoming one. Edits mark the page dirty and a
-// debounced writer flushes {type:"doc",doc} to pages/<id>.json.
+// Each view (doc editor, kanban, whiteboard) edits ONE content model: the
+// active page's. Switching pages saves the outgoing content and loads the
+// incoming one by page type. Edits mark the page dirty and a debounced
+// writer flushes to pages/<id>.json.
 // ============================================================================
 
 import { createLogger } from "@downdraft/engine/util/logger";
 import { store } from "./store";
 import { loadPageContent, savePageContent } from "./workspace";
 import type { EditorSurface } from "../editor/surface";
+import type { KanbanSurface } from "../board/surface";
 import { newBlockId, type Doc } from "../editor/model";
+import { demoBoard, type BoardContent } from "../board/model";
 
 const log = createLogger();
 const SAVE_MS = 700;
 
-export function installPageController(surface: EditorSurface): () => void {
+export interface ViewSurfaces {
+  editor: EditorSurface;
+  kanban: KanbanSurface;
+}
+
+export function installPageController(views: ViewSurfaces): () => void {
   let currentId = store.getState().activePageId;
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
-  let pending: Doc | null = null;
+  let pendingDoc: Doc | null = null;
+  let pendingBoard: BoardContent | null = null;
 
   const flushSave = () => {
     if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-    if (pending !== null && currentId) {
-      savePageContent(currentId, { type: "doc", doc: pending });
-      pending = null;
+    if (!currentId) return;
+    const s = store.getState();
+    const p = s.pages[currentId];
+    if (p?.type === "board" && pendingBoard) {
+      savePageContent(currentId, { type: "board", board: pendingBoard });
+      pendingBoard = null;
+      store.setState({ saveIndicator: "saved" });
+    } else if (pendingDoc) {
+      savePageContent(currentId, { type: "doc", doc: pendingDoc });
+      pendingDoc = null;
       store.setState({ saveIndicator: "saved" });
     }
   };
 
-  const scheduleSave = () => {
+  const scheduleDocSave = () => {
     if (!currentId) return;
-    pending = surface.document;
+    pendingDoc = views.editor.document;
     store.setState({ saveIndicator: "saving" });
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(flushSave, SAVE_MS);
   };
 
-  surface.onChange = scheduleSave;
+  const scheduleBoardSave = () => {
+    if (!currentId) return;
+    pendingBoard = views.kanban.getBoard();
+    store.setState({ saveIndicator: "saving" });
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(flushSave, SAVE_MS);
+  };
+
+  views.editor.onChange = scheduleDocSave;
+  views.kanban.onChange = scheduleBoardSave;
+
+  const routeViews = () => {
+    const s = store.getState();
+    const p = s.activePageId ? s.pages[s.activePageId] : null;
+    views.editor.setActive(!p || p.type === "doc");
+    views.kanban.setActive(p?.type === "board");
+  };
 
   const loadInto = (id: string | null) => {
-    if (!id) {
-      surface.setDoc({ blocks: [{ id: newBlockId(), kind: "paragraph", spans: [] }] });
+    const s = store.getState();
+    const p = id ? s.pages[id] : null;
+    if (!p) {
+      views.editor.setDoc({ blocks: [{ id: newBlockId(), kind: "paragraph", spans: [] }] });
+      views.editor.setActive(true);
+      views.kanban.setActive(false);
       return;
     }
-    const c = loadPageContent(id);
-    if (c?.type === "doc" && c.doc?.blocks?.length) {
-      surface.setDoc(c.doc);
+    const c = loadPageContent(id!);
+    if (p.type === "board") {
+      const board = (c?.board as BoardContent | undefined) ?? demoBoard();
+      views.kanban.setBoard(board);
+      views.kanban.setActive(true);
+      views.editor.setActive(false);
+      if (!c) scheduleBoardSave();
     } else {
-      surface.setDoc({ blocks: [{ id: newBlockId(), kind: "paragraph", spans: [] }] });
+      if (c?.type === "doc" && c.doc?.blocks?.length) {
+        views.editor.setDoc(c.doc);
+      } else {
+        views.editor.setDoc({ blocks: [{ id: newBlockId(), kind: "paragraph", spans: [] }] });
+      }
+      views.editor.setActive(true);
+      views.kanban.setActive(false);
     }
   };
 
@@ -56,11 +102,16 @@ export function installPageController(surface: EditorSurface): () => void {
   loadInto(currentId);
 
   const unsub = store.subscribe((s) => {
-    if (s.activePageId === currentId) return;
+    if (s.activePageId === currentId) {
+      routeViews(); // page type may have changed
+      return;
+    }
     flushSave();
     currentId = s.activePageId;
     loadInto(currentId);
   });
+
+  log.info("page-controller", `installed (active=${currentId})`);
 
   return () => {
     flushSave();

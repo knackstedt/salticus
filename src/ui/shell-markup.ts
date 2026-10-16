@@ -33,11 +33,51 @@ function treeItems(s: AppState, parentId: string | null, depth: number): string 
 function pageItem(s: AppState, p: PageMeta, depth: number): string {
   const active = s.activePageId === p.id ? ` data-active="true"` : "";
   const pad = 10 + depth * 14;
+  const fav = `<span class="fav${p.favorite ? " on" : ""}" data-action="fav-page" data-id="${esc(p.id)}">${icon("star", 11)}</span>`;
   return `
     <div class="gn-item"${active} data-action="open-page" data-id="${esc(p.id)}" style="padding-left:${pad}px">
       <span class="ic">${typeIcon(p)}</span>
       <span class="lb">${esc(p.title) || "Untitled"}</span>
+      ${fav}
     </div>`;
+}
+
+function trashView(s: AppState): string {
+  const trashed = Object.values(s.pages).filter((p) => p.deleted);
+  const rows = trashed.length > 0
+    ? trashed.map((p) => `
+      <div class="gn-item" style="padding-left:10px">
+        <span class="ic">${typeIcon(p)}</span>
+        <span class="lb">${esc(p.title) || "Untitled"}</span>
+        <span class="fav" data-action="restore-page" data-id="${esc(p.id)}" title="Restore">${icon("undo", 11)}</span>
+        <span class="fav" data-action="destroy-page" data-id="${esc(p.id)}" title="Delete forever">${icon("close", 10)}</span>
+      </div>`).join("")
+    : `<div class="gn-faint" style="padding:8px 14px;font-size:12px">No deleted pages</div>`;
+  return `
+    <div class="gn-section gn-row">
+      <span class="gn-btn" data-action="sidebar-view" data-view="pages" style="padding:1px 4px">${icon("chevron", 12)}</span>
+      <span class="gn-grow">TRASH</span>
+    </div>
+    <div class="gn-col" style="gap:1px;padding:0 6px">${rows}</div>
+    <div class="gn-grow"></div>`;
+}
+
+function settingsView(s: AppState): string {
+  const themeBtn = (name: "dark" | "light", label: string) =>
+    `<div class="gn-btn" data-action="set-theme" data-theme="${name}" data-active="${s.theme === name}" style="text-align:center;flex:1">${label}</div>`;
+  return `
+    <div class="gn-section gn-row">
+      <span class="gn-btn" data-action="sidebar-view" data-view="pages" style="padding:1px 4px">${icon("chevron", 12)}</span>
+      <span class="gn-grow">SETTINGS</span>
+    </div>
+    <div style="padding:4px 14px">
+      <div class="gn-faint" style="font-size:11px;padding-bottom:6px">Theme</div>
+      <div class="gn-row" style="gap:6px">${themeBtn("dark", "Dark")}${themeBtn("light", "Light")}</div>
+      <div class="gn-faint" style="font-size:11px;padding:14px 0 6px">Workspace</div>
+      <div class="gn-dim" style="font-size:11px">JSON workspace · autosave on</div>
+      <div class="gn-faint" style="font-size:11px;padding-top:14px">Graphic Notes — built on the DownDraft WebGPU engine.</div>
+    </div>
+    <div class="gn-grow"></div>`;
 }
 
 export function sidebarMarkup(s: AppState): string {
@@ -49,26 +89,33 @@ export function sidebarMarkup(s: AppState): string {
   const pagesHtml = tree.length > 0
     ? tree
     : `<div class="gn-item" data-action="new-page" style="padding-left:10px"><span class="ic">${icon("plus", 14)}</span><span class="lb gn-faint">New page</span></div>`;
+  const body = s.sidebarView === "trash" ? trashView(s)
+    : s.sidebarView === "settings" ? settingsView(s)
+    : `${favHtml}
+      <div class="gn-section gn-row"><span class="gn-grow">PAGES</span>
+        <span class="gn-btn" data-action="new-page" data-type="doc" title="New doc" style="padding:1px 4px">${icon("doc", 12)}</span>
+        <span class="gn-btn" data-action="new-page" data-type="board" title="New board" style="padding:1px 4px">${icon("board", 12)}</span>
+        <span class="gn-btn" data-action="new-page" data-type="whiteboard" title="New canvas" style="padding:1px 4px">${icon("canvas", 12)}</span>
+      </div>
+      <div class="gn-col" style="gap:1px;padding:0 6px">
+        ${pagesHtml}
+      </div>
+      <div class="gn-grow"></div>`;
   return `
     <div class="gn-col" style="height:${s.windowH}px;overflow:hidden">
       <div class="gn-row" style="padding:12px 10px 6px;gap:8px">
         <div style="width:20px;height:20px;border-radius:5px;background:#8f7cf6;text-align:center;color:#fff;font-size:12px;line-height:20px;flex:none">G</div>
         <div class="gn-grow" style="font-weight:600;font-size:13px">Graphic Notes</div>
-        <div class="gn-btn" data-action="toggle-theme" style="padding:3px 5px">${icon("moon", 13)}</div>
+        <div class="gn-btn" data-action="toggle-theme" style="padding:3px 5px">${icon(s.theme === "dark" ? "moon" : "sun", 13)}</div>
       </div>
       <div style="padding:4px 8px">
         <div class="gn-item" data-action="toggle-palette"><span class="ic">${icon("search", 14)}</span><span class="lb">Search</span></div>
       </div>
-      ${favHtml}
-      <div class="gn-section gn-row"><span class="gn-grow">PAGES</span><span class="gn-btn" data-action="new-page" style="padding:1px 4px">${icon("plus", 13)}</span></div>
-      <div class="gn-col" style="gap:1px;padding:0 6px">
-        ${pagesHtml}
-      </div>
-      <div class="gn-grow"></div>
+      ${body}
       <div class="gn-divider"></div>
       <div style="padding:0 8px 10px">
-        <div class="gn-item"><span class="ic">${icon("trash", 14)}</span><span class="lb">Trash</span></div>
-        <div class="gn-item"><span class="ic">${icon("gear", 14)}</span><span class="lb">Settings</span></div>
+        <div class="gn-item"${s.sidebarView === "trash" ? ' data-active="true"' : ""} data-action="sidebar-view" data-view="trash"><span class="ic">${icon("trash", 14)}</span><span class="lb">Trash</span></div>
+        <div class="gn-item"${s.sidebarView === "settings" ? ' data-active="true"' : ""} data-action="sidebar-view" data-view="settings"><span class="ic">${icon("gear", 14)}</span><span class="lb">Settings</span></div>
       </div>
     </div>`;
 }

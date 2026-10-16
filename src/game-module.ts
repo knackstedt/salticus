@@ -8,14 +8,18 @@ import { mountShell } from "./ui/shell";
 import { store } from "./app/store";
 import { gameMcpTools } from "./mcp/tools";
 import { EditorSurface } from "./editor/surface";
+import { KanbanSurface } from "./board/surface";
+import { RunCache } from "./text/run-cache";
+import { TextAtlas } from "./text/atlas";
 import { loadFaces } from "./text/fonts";
 import { initWorkspace, installAutosave, flushNow } from "./app/workspace";
 import { installPageController } from "./app/page-controller";
 
 const log = createLogger();
 
-/** Live editor surface — installed by the renderer module, read by MCP tools. */
+/** Live view surfaces — installed by the renderer module, read by MCP tools. */
 export let editorSurface: EditorSurface | null = null;
+export let kanbanSurface: KanbanSurface | null = null;
 let pageCtl: (() => void) | null = null;
 
 // ============================================================================
@@ -59,21 +63,31 @@ export const gameModule: GameModule = {
     });
     renderer.useRendererModule(mod);
 
-    // Custom GPU editor surface — drawn beneath the chrome panels.
-    const editorModule: RendererModule = {
-      name: "gn-editor",
+    // Custom GPU surfaces — drawn beneath the chrome panels. All views share
+    // one glyph atlas/run cache so shaped text is reused across surfaces.
+    const surfacesModule: RendererModule = {
+      name: "gn-surfaces",
       version: "0.1.0",
       register(mctx) {
-        const surf = new EditorSurface(mctx);
+        const atlas = new TextAtlas(mctx.getDevice(), 2048);
+        const cache = new RunCache(atlas);
+        const surf = new EditorSurface(mctx, cache);
+        const board = new KanbanSurface(mctx, cache);
         editorSurface = surf;
+        kanbanSurface = board;
         surf.setRect(store.getState().contentRect);
+        board.setRect(store.getState().contentRect);
         mctx.registerUiCompositor?.(surf);
-        mctx.onFrame("afterFrame", (dt) => surf.tick(dt));
-        const unsub = store.subscribe((s) => surf.setRect(s.contentRect));
+        mctx.registerUiCompositor?.(board);
+        mctx.onFrame("afterFrame", (dt) => { surf.tick(dt); board.update(dt); });
+        const unsub = store.subscribe((s) => {
+          surf.setRect(s.contentRect);
+          board.setRect(s.contentRect);
+        });
         void surf.init().then(async () => {
           const defs = await loadFaces();
-          for (const def of defs) surf.runCache.registerFace(def);
-          pageCtl = installPageController(surf);
+          for (const def of defs) cache.registerFace(def);
+          pageCtl = installPageController({ editor: surf, kanban: board });
           surf.enableTextInput();
         }).catch((e) => log.warn("game", `editor init failed: ${e}`));
         mctx.onDispose(() => {
@@ -83,11 +97,15 @@ export const gameModule: GameModule = {
           unsubAutosave();
           flushNow();
           surf.dispose();
+          board.dispose();
+          cache.dispose();
+          atlas.destroy();
           if (editorSurface === surf) editorSurface = null;
+          if (kanbanSurface === board) kanbanSurface = null;
         });
       },
     };
-    renderer.useRendererModule(editorModule);
+    renderer.useRendererModule(surfacesModule);
 
     return {
       start() {

@@ -5,7 +5,8 @@
 
 import { newId, pageIcon, store, type PageMeta, type PageType } from "./store";
 import { newBlockId } from "../editor/model";
-import { savePageContent } from "./workspace";
+import { savePageContent, deletePageFile } from "./workspace";
+import { newColumn, type BoardContent } from "../board/model";
 
 export function createPage(opts: { title?: string; type?: PageType; parentId?: string | null; open?: boolean } = {}): PageMeta {
   const s = store.getState();
@@ -36,9 +37,13 @@ export function createPage(opts: { title?: string; type?: PageType; parentId?: s
   }
   store.setState(patch);
   // Seed content file.
+  const board: BoardContent | undefined = meta.type === "board"
+    ? { columns: [newColumn("To Do", 0), newColumn("In Progress", 1), newColumn("Done", 3)] }
+    : undefined;
   savePageContent(id, {
     type: meta.type,
     doc: meta.type === "doc" ? { blocks: [{ id: newBlockId(), kind: "paragraph", spans: [] }] } : undefined,
+    board,
   });
   return meta;
 }
@@ -70,6 +75,42 @@ export function renamePage(id: string, title: string): void {
   const p = s.pages[id];
   if (!p) return;
   store.setState({ pages: { ...s.pages, [id]: { ...p, title, updatedAt: Date.now() } } });
+}
+
+export function toggleFavorite(id: string): void {
+  const s = store.getState();
+  const p = s.pages[id];
+  if (!p) return;
+  store.setState({ pages: { ...s.pages, [id]: { ...p, favorite: !p.favorite } } });
+}
+
+export function restorePage(id: string): void {
+  const s = store.getState();
+  const p = s.pages[id];
+  if (!p?.deleted) return;
+  store.setState({ pages: { ...s.pages, [id]: { ...p, deleted: false } } });
+}
+
+export function destroyPage(id: string): void {
+  const s = store.getState();
+  const pages = { ...s.pages };
+  delete pages[id];
+  store.setState({
+    pages,
+    rootOrder: s.rootOrder.filter((r) => r !== id),
+    openTabs: s.openTabs.filter((t) => t !== id),
+    activePageId: s.activePageId === id ? null : s.activePageId,
+  });
+  deletePageFile(id);
+}
+
+export function closeTab(id: string): void {
+  const s = store.getState();
+  const tabs = s.openTabs.filter((t) => t !== id);
+  store.setState({
+    openTabs: tabs,
+    activePageId: s.activePageId === id ? (tabs[tabs.length - 1] ?? null) : s.activePageId,
+  });
 }
 
 export { pageIcon };

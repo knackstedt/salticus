@@ -136,6 +136,16 @@ export class GpuTextPass {
   /** Record the batch into the open UI render pass. */
   render(pass: GPURenderPassEncoder, surfaceW: number, surfaceH: number,
     atlas: TextAtlas, time: number): void {
+    this.renderRanges(pass, surfaceW, surfaceH, atlas, time,
+      [{ start: 0, end: this.count }]);
+  }
+
+  /** Record sub-ranges of the batch, each optionally scissor-clipped.
+   *  Lets surfaces clip quad groups (e.g. kanban column scroll regions)
+   *  while keeping a single instance buffer. */
+  renderRanges(pass: GPURenderPassEncoder, surfaceW: number, surfaceH: number,
+    atlas: TextAtlas, time: number,
+    ranges: { start: number; end: number; scissor?: [number, number, number, number] }[]): void {
     if (this.count === 0) return;
     if (this.boundAtlas !== atlas) {
       this.boundAtlas = atlas;
@@ -157,7 +167,18 @@ export class GpuTextPass {
     this.device.queue.writeBuffer(this.instanceBuf, 0, this.data, 0, this.count * FLOATS_PER_INSTANCE);
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, this.bindGroup);
-    pass.draw(6, this.count);
+    for (const r of ranges) {
+      if (r.end <= r.start) continue;
+      if (r.scissor) {
+        const [sx, sy, sw, sh] = r.scissor;
+        pass.setScissorRect(
+          Math.max(0, Math.floor(sx)), Math.max(0, Math.floor(sy)),
+          Math.max(0, Math.min(surfaceW - sx, Math.ceil(sw))),
+          Math.max(0, Math.min(surfaceH - sy, Math.ceil(sh))));
+      }
+      pass.draw(6, r.end - r.start, 0, r.start);
+      if (r.scissor) pass.setScissorRect(0, 0, surfaceW, surfaceH);
+    }
   }
 
   destroy(): void {

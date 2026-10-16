@@ -94,6 +94,11 @@ body { background: transparent; color: ${t.text}; font-family: 'Inter'; font-siz
 .gn-item[data-active="true"] { background: ${t.bgActive}; color: ${t.text}; }
 .gn-item .ic { width: 18px; text-align: center; flex: none; }
 .gn-item .lb { flex: 1; overflow: hidden; }
+.gn-item .fav { opacity: 0; padding: 1px 3px; border-radius: 3px; color: ${t.textFaint}; flex: none; }
+.gn-item:hover .fav, .gn-item .fav.on { opacity: 1; }
+.gn-item .fav:hover { background: ${t.bgActive}; color: ${t.warn}; }
+.gn-item .fav.on { color: ${t.warn}; }
+.gn-btn[data-active="true"] { background: ${t.bgActive}; color: ${t.text}; }
 
 .gn-section { font-size: 11px; font-weight: 600; color: ${t.textFaint};
   letter-spacing: 0.4px; padding: 14px 10px 4px; }

@@ -13,7 +13,7 @@ import type { HtmlUiContext, UiPanelHandle } from "@downdraft/engine/modules/htm
 import type { GameContext } from "@downdraft/engine/app/main";
 import { createLogger } from "@downdraft/engine/util/logger";
 import { store } from "../app/store";
-import { createPage, deletePage, openPage } from "../app/actions";
+import { closeTab, createPage, deletePage, destroyPage, openPage, restorePage, toggleFavorite } from "../app/actions";
 import { chromeCss, tokens, type ThemeTokens } from "../app/theme";
 import { iconBytes } from "./icons";
 import { sidebarMarkup, topbarMarkup } from "./shell-markup";
@@ -123,6 +123,7 @@ export function mountShell(ui: HtmlUiContext, ctx: GameContext): ShellHandles {
   const unsub = store.subscribe((s) => {
     const key = [
       s.pages, s.rootOrder, s.activePageId, s.openTabs, s.theme, s.saveIndicator,
+      s.sidebarView,
     ].map((v) => (typeof v === "object" ? JSON.stringify(v) : v)).join("|");
     if (key !== lastKey) {
       lastKey = key;
@@ -144,16 +145,25 @@ export function mountShell(ui: HtmlUiContext, ctx: GameContext): ShellHandles {
     if (d.id) openPage(d.id);
   });
   ui.onAction("close-tab", (d) => {
-    const s = store.getState();
-    if (!d.id) return;
-    const tabs = s.openTabs.filter((x) => x !== d.id);
-    store.setState({
-      openTabs: tabs,
-      activePageId: s.activePageId === d.id ? (tabs[tabs.length - 1] ?? null) : s.activePageId,
-    });
+    if (d.id) closeTab(d.id);
   });
   ui.onAction("delete-page", (d) => {
     if (d.id) deletePage(d.id);
+  });
+  ui.onAction("fav-page", (d) => {
+    if (d.id) toggleFavorite(d.id);
+  });
+  ui.onAction("restore-page", (d) => {
+    if (d.id) restorePage(d.id);
+  });
+  ui.onAction("destroy-page", (d) => {
+    if (d.id) destroyPage(d.id);
+  });
+  ui.onAction("sidebar-view", (d) => {
+    store.setState({ sidebarView: d.view === "trash" || d.view === "settings" ? d.view : "pages" });
+  });
+  ui.onAction("set-theme", (d) => {
+    store.setState({ theme: d.theme === "light" ? "light" : "dark" });
   });
   ui.onAction("toggle-palette", () => store.setState((s) => ({ paletteOpen: !s.paletteOpen })));
   ui.onAction("toggle-theme", () => store.setState((s) => ({ theme: s.theme === "dark" ? "light" : "dark" })));
