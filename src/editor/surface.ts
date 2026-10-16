@@ -870,10 +870,15 @@ export class EditorSurface implements ScreenUiCompositor {
   }
 
   render(pass: GPURenderPassEncoder, surfaceW: number, surfaceH: number): void {
-    if (!this.layout || this.rect.w <= 0) return;
+    if (this.rect.w <= 0) return;
     const p = this.pass;
     const t = this.theme;
     p.begin();
+    p.rect(this.rect.x, this.rect.y, this.rect.w, this.rect.h, t.bg);
+    if (!this.layout) {
+      p.render(pass, surfaceW, surfaceH, this.atlas, this.time);
+      return;
+    }
 
     const ox = this.rect.x + PAD_X;
     const oy = this.rect.y + PAD_TOP - this.scrollY;
@@ -1148,6 +1153,7 @@ function clamp(v: number, lo: number, hi: number): number {
 
 export function darkTheme(): EditorTheme {
   return {
+    bg: [0x19 / 255, 0x1b / 255, 0x1e / 255, 1],
     text: [0.82, 0.84, 0.90, 1],
     textMuted: [0.55, 0.57, 0.64, 1],
     caret: [0.45, 0.62, 0.98, 1],
@@ -1163,6 +1169,7 @@ export function darkTheme(): EditorTheme {
 
 export function lightTheme(): EditorTheme {
   return {
+    bg: [1, 1, 1, 1],
     text: [0.16, 0.17, 0.21, 1],
     textMuted: [0.45, 0.47, 0.52, 1],
     caret: [0.20, 0.42, 0.95, 1],

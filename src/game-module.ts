@@ -7,7 +7,7 @@ import { createLogger } from "@downdraft/engine/util/logger";
 import { mountShell } from "./ui/shell";
 import { store } from "./app/store";
 import { gameMcpTools } from "./mcp/tools";
-import { EditorSurface } from "./editor/surface";
+import { EditorSurface, darkTheme, lightTheme } from "./editor/surface";
 import { KanbanSurface } from "./board/surface";
 import { WhiteboardSurface } from "./wb/surface";
 import { PaletteSurface } from "./ui/palette";
@@ -90,11 +90,16 @@ export const gameModule: GameModule = {
         mctx.registerUiCompositor?.(wb);
         mctx.registerUiCompositor?.(palette);
         mctx.onFrame("afterFrame", (dt) => { surf.tick(dt); board.update(dt); wb.update(dt); palette.update(dt); });
+        let lastTheme = store.getState().theme;
         const unsub = store.subscribe((s) => {
           surf.setRect(s.contentRect);
           board.setRect(s.contentRect);
           wb.setRect(s.contentRect);
           palette.setRect(s.contentRect);
+          if (s.theme !== lastTheme) {
+            lastTheme = s.theme;
+            surf.setTheme(s.theme === "dark" ? darkTheme() : lightTheme());
+          }
         });
         void surf.init().then(async () => {
           const defs = await loadFaces();

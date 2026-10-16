@@ -401,6 +401,8 @@ function resolveStyle(block: Block, s: TextStyle, theme: EditorTheme): TextStyle
 }
 
 export interface EditorTheme {
+  /** Page background behind the text column. */
+  bg: Rgba;
   text: Rgba;
   textMuted: Rgba;
   caret: Rgba;

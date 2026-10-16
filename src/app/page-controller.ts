@@ -121,14 +121,26 @@ export function installPageController(views: ViewSurfaces): () => void {
   // Initial load.
   loadInto(currentId);
 
+  let switchTimer: ReturnType<typeof setTimeout> | null = null;
+  let pendingSwitch: string | null | undefined;
   const unsub = store.subscribe((s) => {
     if (s.activePageId === currentId) {
       routeViews(); // page type may have changed
       return;
     }
-    flushSave();
-    currentId = s.activePageId;
-    loadInto(currentId);
+    // Defer the flush+load off the subscriber — heavy sync work (fs IO,
+    // doc swap) inside a setState notification risks reentrant churn.
+    pendingSwitch = s.activePageId;
+    if (switchTimer) return;
+    switchTimer = setTimeout(() => {
+      switchTimer = null;
+      if (pendingSwitch === undefined) return;
+      const next = pendingSwitch;
+      pendingSwitch = undefined;
+      flushSave();
+      currentId = next;
+      loadInto(currentId);
+    }, 0);
   });
 
   log.info("page-controller", `installed (active=${currentId})`);
