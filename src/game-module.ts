@@ -10,6 +10,7 @@ import { gameMcpTools } from "./mcp/tools";
 import { EditorSurface } from "./editor/surface";
 import { KanbanSurface } from "./board/surface";
 import { WhiteboardSurface } from "./wb/surface";
+import { PaletteSurface } from "./ui/palette";
 import { RunCache } from "./text/run-cache";
 import { TextAtlas } from "./text/atlas";
 import { loadFaces } from "./text/fonts";
@@ -76,20 +77,24 @@ export const gameModule: GameModule = {
         const surf = new EditorSurface(mctx, cache);
         const board = new KanbanSurface(mctx, cache);
         const wb = new WhiteboardSurface(mctx, cache);
+        const palette = new PaletteSurface(mctx, cache);
         editorSurface = surf;
         kanbanSurface = board;
         wbSurface = wb;
         surf.setRect(store.getState().contentRect);
         board.setRect(store.getState().contentRect);
         wb.setRect(store.getState().contentRect);
+        palette.setRect(store.getState().contentRect);
         mctx.registerUiCompositor?.(surf);
         mctx.registerUiCompositor?.(board);
         mctx.registerUiCompositor?.(wb);
-        mctx.onFrame("afterFrame", (dt) => { surf.tick(dt); board.update(dt); wb.update(dt); });
+        mctx.registerUiCompositor?.(palette);
+        mctx.onFrame("afterFrame", (dt) => { surf.tick(dt); board.update(dt); wb.update(dt); palette.update(dt); });
         const unsub = store.subscribe((s) => {
           surf.setRect(s.contentRect);
           board.setRect(s.contentRect);
           wb.setRect(s.contentRect);
+          palette.setRect(s.contentRect);
         });
         void surf.init().then(async () => {
           const defs = await loadFaces();
@@ -106,6 +111,7 @@ export const gameModule: GameModule = {
           surf.dispose();
           board.dispose();
           wb.dispose();
+          palette.dispose();
           cache.dispose();
           atlas.destroy();
           if (editorSurface === surf) editorSurface = null;

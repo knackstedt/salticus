@@ -175,6 +175,58 @@ export function flushNow(): void {
   }
 }
 
+// ── Search ──────────────────────────────────────────────────────────────────
+
+export interface PageHit {
+  pageId: string;
+  title: string;
+  type: PageMeta["type"];
+  /** First matching text snippet, if the hit came from content. */
+  snippet: string | null;
+}
+
+function docText(doc: Doc | undefined): string {
+  if (!doc) return "";
+  return doc.blocks.map((b) => b.spans.map((s) => s.text).join("")).join("\n");
+}
+
+function contentText(c: PageContent): string {
+  let out = docText(c.doc);
+  const board = c.board as { columns?: { title: string; cards?: { title: string; desc?: string }[] }[] } | undefined;
+  if (board?.columns) {
+    for (const col of board.columns) {
+      out += "\n" + col.title;
+      for (const card of col.cards ?? []) out += "\n" + card.title + "\n" + (card.desc ?? "");
+    }
+  }
+  const wb = c.wb as { items?: { text?: string }[] } | undefined;
+  if (wb?.items) for (const it of wb.items) if (it.text) out += "\n" + it.text;
+  return out;
+}
+
+/** Search page titles + content text. Non-deleted pages only. */
+export function searchPages(query: string): PageHit[] {
+  const q = query.trim().toLowerCase();
+  const s = store.getState();
+  const hits: PageHit[] = [];
+  for (const p of Object.values(s.pages)) {
+    if (p.deleted) continue;
+    if (!q) { hits.push({ pageId: p.id, title: p.title, type: p.type, snippet: null }); continue; }
+    const titleHit = (p.title || "").toLowerCase().includes(q);
+    let snippet: string | null = null;
+    const c = loadPageContent(p.id);
+    if (c) {
+      const text = contentText(c);
+      const idx = text.toLowerCase().indexOf(q);
+      if (idx >= 0) {
+        snippet = text.slice(Math.max(0, idx - 30), idx + q.length + 50).replace(/\n+/g, " · ").trim();
+      }
+    }
+    if (titleHit || snippet) hits.push({ pageId: p.id, title: p.title, type: p.type, snippet });
+  }
+  return hits;
+}
+
 /** Subscribe: workspace metadata autosaves on relevant store changes. */
 export function installAutosave(): () => void {
   let last = "";
