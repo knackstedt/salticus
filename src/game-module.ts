@@ -1,13 +1,20 @@
 import { GameRenderer } from "@downdraft/engine";
 import type { GameModule } from "@downdraft/engine/app/main";
+import type { RendererModule } from "@downdraft/engine/module/renderer-module";
 import { createHtmlUi } from "@downdraft/engine/modules/html-ui";
 import { createGameMcp } from "@downdraft/engine/app/main";
 import { createLogger } from "@downdraft/engine/util/logger";
 import { mountShell } from "./ui/shell";
 import { store } from "./app/store";
 import { gameMcpTools } from "./mcp/tools";
+import { EditorSurface } from "./editor/surface";
+import { loadFaces } from "./text/fonts";
+import { demoDoc } from "./app/demo-doc";
 
 const log = createLogger();
+
+/** Live editor surface — installed by the renderer module, read by MCP tools. */
+export let editorSurface: EditorSurface | null = null;
 
 // ============================================================================
 // Graphic Notes — renderer-only GameModule
@@ -41,6 +48,32 @@ export const gameModule: GameModule = {
       },
     });
     renderer.useRendererModule(mod);
+
+    // Custom GPU editor surface — drawn beneath the chrome panels.
+    const editorModule: RendererModule = {
+      name: "gn-editor",
+      version: "0.1.0",
+      register(mctx) {
+        const surf = new EditorSurface(mctx);
+        editorSurface = surf;
+        surf.setRect(store.getState().contentRect);
+        mctx.registerUiCompositor?.(surf);
+        mctx.onFrame("afterFrame", (dt) => surf.tick(dt));
+        const unsub = store.subscribe((s) => surf.setRect(s.contentRect));
+        void surf.init().then(async () => {
+          const defs = await loadFaces();
+          for (const def of defs) surf.runCache.registerFace(def);
+          surf.setDoc(demoDoc());
+          surf.enableTextInput();
+        }).catch((e) => log.warn("game", `editor init failed: ${e}`));
+        mctx.onDispose(() => {
+          unsub();
+          surf.dispose();
+          if (editorSurface === surf) editorSurface = null;
+        });
+      },
+    };
+    renderer.useRendererModule(editorModule);
 
     return {
       start() {

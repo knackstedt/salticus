@@ -8,9 +8,41 @@ import type { GameContext } from "@downdraft/engine/app/main";
 import { jsonResult, type McpToolRegistration } from "@downdraft/engine/app/main/mcp-harness";
 import { store } from "../app/store";
 import { createPage, deletePage, openPage, renamePage } from "../app/actions";
+import { editorSurface } from "../game-module";
 
 export function gameMcpTools(_ctx: GameContext): McpToolRegistration[] {
   return [
+    {
+      def: {
+        name: "type_text",
+        description: "Insert text at the editor caret (bypasses OS text input — for automation).",
+        inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
+      },
+      handler: (p) => {
+        const surf = editorSurface;
+        if (!surf) return jsonResult({ ok: false, error: "editor not ready" });
+        surf.insertTextPublic(String(p.text ?? ""));
+        return jsonResult({ ok: true, caret: surf.caret });
+      },
+    },
+    {
+      def: {
+        name: "editor_state",
+        description: "Dump editor surface state: caret, focus, doc stats.",
+        inputSchema: { type: "object", properties: {} },
+      },
+      handler: () => {
+        const surf = editorSurface;
+        if (!surf) return jsonResult({ ok: false, error: "editor not ready" });
+        return jsonResult({
+          ok: true,
+          ready: surf.ready,
+          caret: surf.caret,
+          blocks: surf.document.blocks.length,
+          cache: surf.runCache.stats,
+        });
+      },
+    },
     {
       def: {
         name: "app_state",
