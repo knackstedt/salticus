@@ -9,12 +9,14 @@ import { store } from "./app/store";
 import { gameMcpTools } from "./mcp/tools";
 import { EditorSurface } from "./editor/surface";
 import { loadFaces } from "./text/fonts";
-import { demoDoc } from "./app/demo-doc";
+import { initWorkspace, installAutosave, flushNow } from "./app/workspace";
+import { installPageController } from "./app/page-controller";
 
 const log = createLogger();
 
 /** Live editor surface — installed by the renderer module, read by MCP tools. */
 export let editorSurface: EditorSurface | null = null;
+let pageCtl: (() => void) | null = null;
 
 // ============================================================================
 // Graphic Notes — renderer-only GameModule
@@ -40,6 +42,14 @@ export const gameModule: GameModule = {
     const renderer = ctx.renderer as GameRenderer;
     renderer.setViewportCount(0);
 
+    // Workspace metadata must be loaded before the shell builds its lists.
+    try {
+      initWorkspace();
+    } catch (e) {
+      log.warn("game", `workspace init failed: ${e}`);
+    }
+    const unsubAutosave = installAutosave();
+
     const mod = createHtmlUi({
       name: "graphic-notes-ui",
       nav: false,
@@ -63,11 +73,15 @@ export const gameModule: GameModule = {
         void surf.init().then(async () => {
           const defs = await loadFaces();
           for (const def of defs) surf.runCache.registerFace(def);
-          surf.setDoc(demoDoc());
+          pageCtl = installPageController(surf);
           surf.enableTextInput();
         }).catch((e) => log.warn("game", `editor init failed: ${e}`));
         mctx.onDispose(() => {
+          pageCtl?.();
+          pageCtl = null;
           unsub();
+          unsubAutosave();
+          flushNow();
           surf.dispose();
           if (editorSurface === surf) editorSurface = null;
         });

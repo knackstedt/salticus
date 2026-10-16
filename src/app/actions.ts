@@ -4,6 +4,8 @@
 // ============================================================================
 
 import { newId, pageIcon, store, type PageMeta, type PageType } from "./store";
+import { newBlockId } from "../editor/model";
+import { savePageContent } from "./workspace";
 
 export function createPage(opts: { title?: string; type?: PageType; parentId?: string | null; open?: boolean } = {}): PageMeta {
   const s = store.getState();
@@ -33,6 +35,11 @@ export function createPage(opts: { title?: string; type?: PageType; parentId?: s
     patch.openTabs = s.openTabs.includes(id) ? s.openTabs : [...s.openTabs, id];
   }
   store.setState(patch);
+  // Seed content file.
+  savePageContent(id, {
+    type: meta.type,
+    doc: meta.type === "doc" ? { blocks: [{ id: newBlockId(), kind: "paragraph", spans: [] }] } : undefined,
+  });
   return meta;
 }
 
