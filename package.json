@@ -1,0 +1,31 @@
+{
+  "name": "graphic-notes",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "draft dev",
+    "build": "draft release --stage=build",
+    "release": "draft release",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint",
+    "test": "npm test"
+  },
+  "dependencies": {
+    "@downdraft/engine": "^0.5.1",
+    "@downdraft/platform-native": "^0.5.1",
+    "harfbuzzjs": "^1.6.3",
+    "zustand": "^5.0.15"
+  },
+  "devDependencies": {
+    "@downdraft/cli": "^0.5.1",
+    "@types/node": "^22.10.0",
+    "@webgpu/types": "^0.1.71",
+    "oxlint": "^1.4.0",
+    "typescript": "^5.9.3",
+    "vite": "^6.0.0"
+  },
+  "trustedDependencies": [
+    "@downdraft/platform-native",
+    "koffi"
+  ]
+}

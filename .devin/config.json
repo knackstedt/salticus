@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "downdraft": {
+      "command": "bun",
+      "args": ["run", "src/main.ts"],
+      "env": {
+        "DOWNDRAFT_MCP": "1"
+      }
+    }
+  }
+}
