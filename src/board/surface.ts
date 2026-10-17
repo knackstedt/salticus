@@ -318,12 +318,11 @@ export class KanbanSurface implements ScreenUiCompositor {
       if (!inRect(e.clientX, e.clientY)) return;
       ctrl.stopPropagation();
       const ci = this.hitColumn(e.clientX);
-      if (ci >= 0) {
-        const col = this.board.columns[ci]!;
-        const contentH = this.colH(col) - HEADER_H - ADD_H;
+      const col = ci >= 0 ? this.board.columns[ci]! : null;
+      const vMax = col ? Math.max(0, this.colContentH(col) - (this.colH(col) - HEADER_H - ADD_H)) : 0;
+      if (col && vMax > 0) {
         const cur = this.colScroll(col.id);
-        const max = Math.max(0, this.colContentH(col) - contentH);
-        this.scroll.set(col.id, Math.max(0, Math.min(max, cur + e.deltaY)));
+        this.scroll.set(col.id, Math.max(0, Math.min(vMax, cur + e.deltaY)));
       } else {
         const total = this.board.columns.length * (COL_W + COL_GAP);
         this.offsetX = Math.max(0, Math.min(Math.max(0, total - this.rect.w + 60), this.offsetX + e.deltaY));
@@ -409,11 +408,16 @@ export class KanbanSurface implements ScreenUiCompositor {
     return tokens(store.getState().theme);
   }
 
+  /** Draw `str` with its baseline `ascent` px below `y` — anchored to font
+   *  metrics, not ink height (so descenders don't shift alignment), and
+   *  pixel-snapped for crispness. */
   private text(x: number, y: number, face: string, size: number, str: string, color: Rgba): void {
     const chunk = this.cache.getChunk(face, size, str);
     if (!chunk || !chunk.region) return;
-    this.pass.text(x + chunk.inkX, y + (size * 1.3 - chunk.h) / 2, chunk.w, chunk.h,
-      { region: chunk.region, atlasSize: this.atlas.size }, color);
+    const run = this.cache.getRun(face, size, str);
+    const baseline = y + (run?.ascent ?? size * 0.8);
+    this.pass.text(Math.round(x + chunk.inkX), Math.round(baseline - chunk.baselineInBitmap),
+      chunk.w, chunk.h, { region: chunk.region, atlasSize: this.atlas.size }, color);
   }
 
   private measure(face: string, size: number, str: string): number {

@@ -89,18 +89,18 @@ export class TextShaper {
     return this.fonts.get(key);
   }
 
-  /** Font extents scaled to a pixel size. */
+  /** Font extents at a pixel size. `hExtents()` returns values in the font's
+   *  current scale, so set the scale first — do NOT apply a upem factor again. */
   metrics(key: string, sizePx: number): FaceMetrics {
     const f = this.fonts.get(key);
     if (!f) return { ascent: sizePx * 0.8, descent: sizePx * 0.2, lineGap: 0, upem: 1000 };
+    f.font.setScale(sizePx, sizePx);
     const ext = f.font.hExtents();
-    const upem = f.face.upem;
-    const k = sizePx / upem;
     return {
-      ascent: ext.ascender * k,
-      descent: -ext.descender * k,
-      lineGap: ext.lineGap * k,
-      upem,
+      ascent: ext.ascender,
+      descent: -ext.descender,
+      lineGap: ext.lineGap,
+      upem: f.face.upem,
     };
   }
 

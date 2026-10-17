@@ -6,6 +6,7 @@
 import { newId, pageIcon, store, type PageMeta, type PageType } from "./store";
 import { newBlockId } from "../editor/model";
 import { savePageContent, deletePageFile } from "./workspace";
+import { deleteThumbFile } from "./thumbnails";
 import { newColumn, type BoardContent } from "../board/model";
 import { emptyWhiteboard, type WbContent } from "../wb/model";
 
@@ -21,6 +22,7 @@ export function createPage(opts: { title?: string; type?: PageType; parentId?: s
     icon: null,
     favorite: false,
     deleted: false,
+    expanded: true,
     createdAt: Date.now(),
     updatedAt: Date.now(),
   };
@@ -28,7 +30,7 @@ export function createPage(opts: { title?: string; type?: PageType; parentId?: s
   const patch: Partial<ReturnType<typeof store.getState>> = { pages };
   if (meta.parentId && pages[meta.parentId]) {
     const parent = pages[meta.parentId]!;
-    pages[meta.parentId] = { ...parent, children: [...parent.children, id] };
+    pages[meta.parentId] = { ...parent, children: [...parent.children, id], expanded: true };
   } else {
     patch.rootOrder = [...s.rootOrder, id];
   }
@@ -61,16 +63,39 @@ export function openPage(id: string): void {
   });
 }
 
+/** All descendant ids of `id` (depth-first). */
+function descendants(s: ReturnType<typeof store.getState>, id: string): string[] {
+  const out: string[] = [];
+  const walk = (pid: string) => {
+    for (const cid of s.pages[pid]?.children ?? []) {
+      out.push(cid);
+      walk(cid);
+    }
+  };
+  walk(id);
+  return out;
+}
+
 export function deletePage(id: string): void {
   const s = store.getState();
   const p = s.pages[id];
   if (!p) return;
   const pages = { ...s.pages, [id]: { ...p, deleted: true, updatedAt: Date.now() } };
-  const tabs = s.openTabs.filter((t) => t !== id);
+  // Cascade the trashing to the whole subtree; descendants remember the
+  // cascade root so restoring it can bring them back.
+  const gone = [id];
+  for (const cid of descendants(s, id)) {
+    const c = pages[cid];
+    if (c && !c.deleted) {
+      pages[cid] = { ...c, deleted: true, deletedWith: id, updatedAt: Date.now() };
+      gone.push(cid);
+    }
+  }
+  const tabs = s.openTabs.filter((t) => !gone.includes(t));
   store.setState({
     pages,
     openTabs: tabs,
-    activePageId: s.activePageId === id ? (tabs[tabs.length - 1] ?? null) : s.activePageId,
+    activePageId: s.activePageId && gone.includes(s.activePageId) ? (tabs[tabs.length - 1] ?? null) : s.activePageId,
   });
 }
 
@@ -92,20 +117,41 @@ export function restorePage(id: string): void {
   const s = store.getState();
   const p = s.pages[id];
   if (!p?.deleted) return;
-  store.setState({ pages: { ...s.pages, [id]: { ...p, deleted: false } } });
+  const pages = { ...s.pages, [id]: { ...p, deleted: false, deletedWith: null } };
+  // Bring back descendants that were trashed with this page.
+  for (const cid of Object.keys(pages)) {
+    const c = pages[cid]!;
+    if (c.deletedWith === id) pages[cid] = { ...c, deleted: false, deletedWith: null };
+  }
+  store.setState({ pages });
 }
 
 export function destroyPage(id: string): void {
   const s = store.getState();
   const pages = { ...s.pages };
-  delete pages[id];
+  const gone = [id, ...descendants(s, id)];
+  // Capture the parent before deleting the page record.
+  const parentId = pages[id]?.parentId;
+  for (const gid of gone) delete pages[gid];
+  const parent = parentId ? pages[parentId] : null;
+  if (parent) pages[parent.id] = { ...parent, children: parent.children.filter((c) => c !== id) };
   store.setState({
     pages,
-    rootOrder: s.rootOrder.filter((r) => r !== id),
-    openTabs: s.openTabs.filter((t) => t !== id),
-    activePageId: s.activePageId === id ? null : s.activePageId,
+    rootOrder: s.rootOrder.filter((r) => !gone.includes(r)),
+    openTabs: s.openTabs.filter((t) => !gone.includes(t)),
+    activePageId: s.activePageId && gone.includes(s.activePageId) ? null : s.activePageId,
   });
-  deletePageFile(id);
+  for (const gid of gone) {
+    deletePageFile(gid);
+    deleteThumbFile(gid);
+  }
+}
+
+export function toggleExpanded(id: string): void {
+  const s = store.getState();
+  const p = s.pages[id];
+  if (!p) return;
+  store.setState({ pages: { ...s.pages, [id]: { ...p, expanded: !p.expanded } } });
 }
 
 export function closeTab(id: string): void {

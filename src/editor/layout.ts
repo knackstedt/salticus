@@ -58,8 +58,10 @@ export interface DocLayout {
   width: number;
 }
 
-const LINE_SPACING = 1.42;   // × font size
-const CODE_SPACING = 1.55;
+// Applied to the font's real ascent+descent (~1.21em for Inter) — lands body
+// text at ≈1.5em leading.
+const LINE_SPACING = 1.25;   // × (ascent + descent)
+const CODE_SPACING = 1.38;
 const BLOCK_GAP = 10;        // px between blocks
 const H_GAP = 8;             // extra gap around headings
 const INDENT = 26;           // list/quote indent

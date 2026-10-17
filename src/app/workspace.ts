@@ -69,9 +69,14 @@ export function initWorkspace(): void {
   const pages = meta.pages ?? {};
   const rootOrder = meta.rootOrder ?? Object.keys(pages);
 
-  // Recover any page files not listed in metadata.
+  // Recover any page files not listed in metadata; drop orphaned atomic-write
+  // temp files left behind by a killed process.
   try {
     for (const f of readdirSync(join(workspaceDir(), "pages"))) {
+      if (f.endsWith(".tmp")) {
+        try { unlinkSync(join(workspaceDir(), "pages", f)); } catch { /* ignore */ }
+        continue;
+      }
       if (!f.endsWith(".json")) continue;
       const id = f.slice(0, -5);
       if (!pages[id]) {
@@ -79,6 +84,7 @@ export function initWorkspace(): void {
         pages[id] = {
           id, title: "", type: (c?.type as PageMeta["type"]) ?? "doc",
           parentId: null, children: [], icon: null, favorite: false, deleted: false,
+          expanded: true,
           createdAt: Date.now(), updatedAt: Date.now(),
         };
         rootOrder.push(id);
@@ -86,12 +92,17 @@ export function initWorkspace(): void {
     }
   } catch { /* pages dir may not exist yet */ }
 
+  // Normalize fields added after the first workspace format.
+  for (const p of Object.values(pages)) {
+    if (p.expanded === undefined) p.expanded = true;
+  }
+
   if (Object.keys(pages).length === 0) {
     // Seed the welcome document.
     const id = newId("page");
     const meta0: PageMeta = {
       id, title: "Welcome", type: "doc", parentId: null, children: [],
-      icon: null, favorite: false, deleted: false,
+      icon: null, favorite: false, deleted: false, expanded: true,
       createdAt: Date.now(), updatedAt: Date.now(),
     };
     pages[id] = meta0;

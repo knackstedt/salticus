@@ -70,7 +70,13 @@ export class FtRasterizer {
     if (existing !== undefined) return existing;
     if (!this.symbols) return 0n;
     const h = this.symbols.ft_shim_init(path) as unknown as bigint;
-    if (h === 0n) log.warn("ft", `ft_shim_init failed for ${path}`);
+    if (h === 0n) {
+      log.warn("ft", `ft_shim_init failed for ${path}`);
+    } else {
+      // The shim's first render on a fresh FontSystem can return a zero-width
+      // bitmap — warm it so the calibrate probe / first real text don't eat it.
+      try { this.render(h, "Warmup", 16); } catch { /* best-effort */ }
+    }
     this.faces.set(path, h);
     return h;
   }
@@ -85,10 +91,13 @@ export class FtRasterizer {
       MAX_W, MAX_H,
       ptr(DIMS_OUT) as never, ptr(DIMS_OUT.subarray(1)) as never,
     ) as unknown as number;
-    if (n <= 0) return null;
+    if (n <= 0) return null; // empty raster (e.g. pure whitespace) is valid
     const w = DIMS_OUT[0]!;
     const h = DIMS_OUT[1]!;
-    if (w <= 0 || h <= 0) return null;
+    if (w <= 0 || h <= 0 || w * h * 4 > n) {
+      log.warn("ft", `render dims=${w}x${h} n=${n} h=${handle} text=${JSON.stringify(text.slice(0, 24))}`);
+      return null;
+    }
     const data = new Uint8Array(w * h * 4);
     data.set(RENDER_BUF.subarray(0, w * h * 4));
     return { data, width: w, height: h };

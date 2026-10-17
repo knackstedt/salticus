@@ -88,16 +88,28 @@ body { background: transparent; color: ${t.text}; font-family: 'Inter'; font-siz
 .gn-dim { color: ${t.textDim}; }
 .gn-faint { color: ${t.textFaint}; }
 
-.gn-item { display: flex; align-items: center; gap: 8px; padding: 4px 8px;
-  border-radius: 5px; color: ${t.textDim}; font-size: 13px; }
+.gn-item { display: flex; align-items: center; gap: 6px; padding: 4px 8px;
+  border-radius: 5px; color: ${t.textDim}; font-size: 13px; position: relative; }
 .gn-item:hover { background: ${t.bgHover}; color: ${t.text}; }
 .gn-item[data-active="true"] { background: ${t.bgActive}; color: ${t.text}; }
 .gn-item .ic { width: 18px; text-align: center; flex: none; }
 .gn-item .lb { flex: 1; overflow: hidden; }
+.gn-item .tw { width: 14px; flex: none; display: flex; align-items: center;
+  justify-content: center; color: ${t.textFaint}; border-radius: 3px; }
+.gn-item .tw:hover { background: ${t.bgActive}; color: ${t.text}; }
 .gn-item .fav { opacity: 0; padding: 1px 3px; border-radius: 3px; color: ${t.textFaint}; flex: none; }
 .gn-item:hover .fav, .gn-item .fav.on { opacity: 1; }
 .gn-item .fav:hover { background: ${t.bgActive}; color: ${t.warn}; }
+.gn-item .fav.add:hover { color: ${t.text}; }
 .gn-item .fav.on { color: ${t.warn}; }
+.gn-item .thumb-pop { display: none; position: absolute; left: 10px; top: 26px;
+  z-index: 50; width: 226px; background: ${t.bgElev}; border: 1px solid ${t.line};
+  border-radius: 8px; padding: 6px; box-shadow: 0 6px 20px #0006; }
+.gn-item:hover .thumb-pop { display: block; }
+.thumb-pop .thumb-img { width: 214px; border-radius: 5px; display: block;
+  border: 1px solid ${t.lineSoft}; }
+.thumb-pop .tt { font-size: 11px; color: ${t.textDim}; padding: 5px 2px 1px;
+  overflow: hidden; }
 .gn-btn[data-active="true"] { background: ${t.bgActive}; color: ${t.text}; }
 
 .gn-section { font-size: 11px; font-weight: 600; color: ${t.textFaint};
@@ -110,7 +122,8 @@ body { background: transparent; color: ${t.text}; font-family: 'Inter'; font-siz
 .gn-btn[data-kind="accent"]:hover { filter: brightness(1.1); color: #fff; }
 
 .gn-tab { display: flex; align-items: center; gap: 6px; padding: 4px 10px;
-  border-radius: 5px; color: ${t.textDim}; font-size: 12.5px; max-width: 200px; }
+  border-radius: 5px; color: ${t.textDim}; font-size: 12.5px; max-width: 160px;
+  min-width: 0; flex: 0 1 auto; }
 .gn-tab:hover { background: ${t.bgHover}; color: ${t.text}; }
 .gn-tab[data-active="true"] { background: ${t.bg}; color: ${t.text};
   border: 1px solid ${t.lineSoft}; padding: 3px 9px; }

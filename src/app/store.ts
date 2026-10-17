@@ -17,6 +17,11 @@ export interface PageMeta {
   icon: string | null;
   favorite: boolean;
   deleted: boolean;
+  /** Set when this page was trashed as part of an ancestor cascade — the
+   *  ancestor's id. Cleared on restore. */
+  deletedWith?: string | null;
+  /** Tree node expanded in the sidebar (pages with children). */
+  expanded: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -54,6 +59,9 @@ export interface AppState {
   wbVersion: number;
   paletteOpen: boolean;
   searchOpen: boolean;
+  /** Bumped when a page thumbnail file is (re)captured — nudges chrome to
+   *  re-render so `<img>` picks up fresh bytes. */
+  thumbVersion: number;
   /** Which pane the sidebar shows: the page tree, trash, or settings. */
   sidebarView: "pages" | "trash" | "settings";
   /** Per-view runtime handles, installed by view modules. */
@@ -83,6 +91,7 @@ export const store = createStore<AppState>(() => ({
   wbVersion: 0,
   paletteOpen: false,
   searchOpen: false,
+  thumbVersion: 0,
   sidebarView: "pages",
 }));
 
@@ -98,6 +107,9 @@ export function bumpBoard() {
 }
 export function bumpWb() {
   store.setState((s) => ({ wbVersion: s.wbVersion + 1 }));
+}
+export function bumpThumb() {
+  store.setState((s) => ({ thumbVersion: s.thumbVersion + 1 }));
 }
 
 let idCounter = 0;

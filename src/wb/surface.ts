@@ -403,7 +403,7 @@ export class WhiteboardSurface implements ScreenUiCompositor {
   private text(x: number, y: number, face: string, size: number, str: string, color: Rgba): void {
     const chunk = this.cache.getChunk(face, size, str);
     if (!chunk || !chunk.region) return;
-    this.pass.text(x + chunk.inkX, y, chunk.w, chunk.h,
+    this.pass.text(Math.round(x + chunk.inkX), Math.round(y), chunk.w, chunk.h,
       { region: chunk.region, atlasSize: this.atlas.size }, color);
   }
 

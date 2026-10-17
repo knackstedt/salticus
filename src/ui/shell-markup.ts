@@ -5,6 +5,7 @@
 // ============================================================================
 
 import { type AppState, type PageMeta } from "../app/store";
+import { hasThumb, thumbUrl } from "../app/thumbnails";
 import { icon } from "./icons";
 
 function esc(s: string): string {
@@ -25,20 +26,32 @@ function treeItems(s: AppState, parentId: string | null, depth: number): string 
     const p = s.pages[id];
     if (!p || p.deleted) continue;
     out += pageItem(s, p, depth);
-    if (p.children.length > 0) out += treeItems(s, id, depth + 1);
+    if (p.children.length > 0 && p.expanded) out += treeItems(s, id, depth + 1);
   }
   return out;
 }
 
 function pageItem(s: AppState, p: PageMeta, depth: number): string {
   const active = s.activePageId === p.id ? ` data-active="true"` : "";
-  const pad = 10 + depth * 14;
+  const pad = 4 + depth * 14;
+  const hasKids = p.children.some((c) => s.pages[c] && !s.pages[c]!.deleted);
+  const twist = hasKids
+    ? `<span class="tw" data-action="toggle-expand" data-id="${esc(p.id)}">${icon(p.expanded ? "chevronDown" : "chevron", 11)}</span>`
+    : `<span class="tw"></span>`;
+  const add = `<span class="fav add" data-action="new-subpage" data-id="${esc(p.id)}" title="New sub-page">${icon("plus", 11)}</span>`;
   const fav = `<span class="fav${p.favorite ? " on" : ""}" data-action="fav-page" data-id="${esc(p.id)}">${icon("star", 11)}</span>`;
+  const pop = hasThumb(p.id) ? `
+    <div class="thumb-pop">
+      <img src="${thumbUrl(p.id)}" class="thumb-img"/>
+      <div class="tt">${esc(p.title) || "Untitled"}</div>
+    </div>` : "";
   return `
     <div class="gn-item"${active} data-action="open-page" data-id="${esc(p.id)}" style="padding-left:${pad}px">
+      ${twist}
       <span class="ic">${typeIcon(p)}</span>
       <span class="lb">${esc(p.title) || "Untitled"}</span>
-      ${fav}
+      ${add}${fav}
+      ${pop}
     </div>`;
 }
 
@@ -129,18 +142,29 @@ export function topbarMarkup(s: AppState): string {
       return `
         <div class="gn-tab"${active} data-action="open-page" data-id="${esc(p.id)}">
           ${typeIcon(p)}
-          <span style="overflow:hidden">${esc(p.title) || "Untitled"}</span>
-          <span class="x" data-action="close-tab" data-id="${esc(p.id)}">${icon("close", 9)}</span>
+          <span style="overflow:hidden;white-space:nowrap;flex:0 1 auto">${esc(p.title) || "Untitled"}</span>
+          <span class="x" data-action="close-tab" data-id="${esc(p.id)}" style="flex:none">${icon("close", 9)}</span>
         </div>`;
     })
     .join("");
   const active = s.activePageId ? s.pages[s.activePageId] : null;
-  const crumb = active ? esc(active.title) || "Untitled" : "";
+  let crumb = "";
+  if (active) {
+    // Ancestor chain as a breadcrumb — e.g. "Second Note / Sub Note A".
+    const chain: string[] = [];
+    let cur: PageMeta | undefined = active;
+    let guard = 0;
+    while (cur && guard++ < 16) {
+      chain.unshift(esc(cur.title) || "Untitled");
+      cur = cur.parentId ? s.pages[cur.parentId] : undefined;
+    }
+    crumb = chain.join(" / ");
+  }
   const save = s.saveIndicator === "saving" ? "Saving…" : s.saveIndicator === "error" ? "Save error" : "Saved";
   return `
     <div class="gn-row" style="height:100%;padding:0 8px;gap:4px;border-bottom:1px solid var(--dd-line, #2a2d33)">
       <div class="gn-faint" style="font-size:12px;padding-right:6px">${crumb}</div>
-      <div class="gn-row gn-grow" style="gap:2px">${tabs}</div>
-      <div class="gn-faint" style="font-size:11px;padding:0 6px">${save}</div>
+      <div class="gn-row gn-grow" style="gap:2px;overflow:hidden;flex-wrap:nowrap">${tabs}</div>
+      <div class="gn-faint" style="font-size:11px;padding:0 6px;flex:none">${save}</div>
     </div>`;
 }

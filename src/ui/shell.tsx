@@ -13,7 +13,8 @@ import type { HtmlUiContext, UiPanelHandle } from "@downdraft/engine/modules/htm
 import type { GameContext } from "@downdraft/engine/app/main";
 import { createLogger } from "@downdraft/engine/util/logger";
 import { store } from "../app/store";
-import { closeTab, createPage, deletePage, destroyPage, openPage, restorePage, toggleFavorite } from "../app/actions";
+import { closeTab, createPage, deletePage, destroyPage, openPage, restorePage, toggleExpanded, toggleFavorite } from "../app/actions";
+import { serveThumbs, setThumbUi } from "../app/thumbnails";
 import { chromeCss, tokens, type ThemeTokens } from "../app/theme";
 import { iconBytes } from "./icons";
 import { sidebarMarkup, topbarMarkup } from "./shell-markup";
@@ -89,6 +90,9 @@ export function mountShell(ui: HtmlUiContext, ctx: GameContext): ShellHandles {
   });
   void fontP;
 
+  setThumbUi(ui);
+  serveThumbs();
+
   const st = store.getState();
   const t = tokens(st.theme);
 
@@ -123,7 +127,7 @@ export function mountShell(ui: HtmlUiContext, ctx: GameContext): ShellHandles {
   const unsub = store.subscribe((s) => {
     const key = [
       s.pages, s.rootOrder, s.activePageId, s.openTabs, s.theme, s.saveIndicator,
-      s.sidebarView,
+      s.sidebarView, s.thumbVersion,
     ].map((v) => (typeof v === "object" ? JSON.stringify(v) : v)).join("|");
     if (key !== lastKey) {
       lastKey = key;
@@ -140,6 +144,12 @@ export function mountShell(ui: HtmlUiContext, ctx: GameContext): ShellHandles {
   // ── Actions ──────────────────────────────────────────────────────────
   ui.onAction("new-page", (d) => {
     createPage({ type: (d.type as "doc" | "board" | "whiteboard") || "doc" });
+  });
+  ui.onAction("new-subpage", (d) => {
+    if (d.id) createPage({ type: "doc", parentId: d.id });
+  });
+  ui.onAction("toggle-expand", (d) => {
+    if (d.id) toggleExpanded(d.id);
   });
   ui.onAction("open-page", (d) => {
     if (d.id) openPage(d.id);

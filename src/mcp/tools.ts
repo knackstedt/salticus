@@ -7,7 +7,7 @@
 import type { GameContext } from "@downdraft/engine/app/main";
 import { jsonResult, type McpToolRegistration } from "@downdraft/engine/app/main/mcp-harness";
 import { store } from "../app/store";
-import { createPage, deletePage, openPage, renamePage } from "../app/actions";
+import { createPage, deletePage, destroyPage, openPage, renamePage } from "../app/actions";
 import { editorSurface } from "../game-module";
 
 export function gameMcpTools(_ctx: GameContext): McpToolRegistration[] {
@@ -88,6 +88,25 @@ export function gameMcpTools(_ctx: GameContext): McpToolRegistration[] {
     },
     {
       def: {
+        name: "text_debug",
+        description: "Probe the shared run cache for chunk+run metrics. Params: face, size, text",
+        inputSchema: { type: "object", properties: { face: { type: "string" }, size: { type: "number" }, text: { type: "string" } }, required: ["face", "size", "text"] },
+      },
+      handler: (p) => {
+        const surf = editorSurface;
+        if (!surf) return jsonResult({ ok: false, error: "editor not ready" });
+        const face = String(p.face), size = Number(p.size), text = String(p.text);
+        const ch = surf.runCache.getChunk(face, size, text);
+        const run = surf.runCache.getRun(face, size, text);
+        return jsonResult({
+          ok: true,
+          chunk: ch ? { w: ch.w, h: ch.h, region: !!ch.region, inkX: ch.inkX, bib: ch.baselineInBitmap } : null,
+          run: run ? { advance: run.advance, ascent: run.ascent, descent: run.descent } : null,
+        });
+      },
+    },
+    {
+      def: {
         name: "open_page",
         description: "Open a page by id (activates it + adds a tab).",
         inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
@@ -111,11 +130,12 @@ export function gameMcpTools(_ctx: GameContext): McpToolRegistration[] {
     {
       def: {
         name: "delete_page",
-        description: "Soft-delete a page (moves to trash). Params: id",
-        inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+        description: "Delete a page. Params: id, hard? (true = destroy forever incl. descendants)",
+        inputSchema: { type: "object", properties: { id: { type: "string" }, hard: { type: "boolean" } }, required: ["id"] },
       },
       handler: (p) => {
-        deletePage(p.id as string);
+        if (p.hard) destroyPage(p.id as string);
+        else deletePage(p.id as string);
         return jsonResult({ ok: true });
       },
     },

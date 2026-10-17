@@ -10,6 +10,7 @@
 import { createLogger } from "@downdraft/engine/util/logger";
 import { store } from "./store";
 import { loadPageContent, savePageContent } from "./workspace";
+import { requestThumb } from "./thumbnails";
 import type { EditorSurface } from "../editor/surface";
 import type { KanbanSurface } from "../board/surface";
 import type { WhiteboardSurface } from "../wb/surface";
@@ -51,6 +52,7 @@ export function installPageController(views: ViewSurfaces): () => void {
       pendingDoc = null;
       store.setState({ saveIndicator: "saved" });
     }
+    requestThumb(currentId, 150);
   };
 
   const scheduleDocSave = () => {
@@ -116,6 +118,8 @@ export function installPageController(views: ViewSurfaces): () => void {
       }
     }
     routeViews();
+    // Snapshot the freshly rendered page for its sidebar thumbnail.
+    requestThumb(id, 1200);
   };
 
   // Initial load.

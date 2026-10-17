@@ -19,12 +19,15 @@ import { docCompare, blockText, newBlockId, type Block, type Doc, type DocPos, t
 import { History } from "./history";
 import { matchBlockShortcut, matchInlineShortcut, inlineMarkerLen, stripBlockPrefix, styleRange } from "./markdown";
 import { darkSyntax, lightSyntax } from "./highlight";
+import { store } from "../app/store";
 import { createLogger } from "@downdraft/engine/util/logger";
 
 const log = createLogger();
 
 const PAD_X = 56;
 const PAD_TOP = 28;
+/** Height of the fixed page-title header above the scrolling doc. */
+const TITLE_H = 44;
 const SCROLL_LERP = 14;   // /s — exponential smoothing rate
 const CARET_LERP = 22;
 
@@ -291,7 +294,7 @@ export class EditorSurface implements ScreenUiCompositor {
     this.unsubs.push(bus.onWheel((e, ctrl) => {
       if (!inRect(e.clientX, e.clientY)) return;
       ctrl.stopPropagation();
-      const max = Math.max(0, (this.layout?.height ?? 0) + PAD_TOP * 2 - this.rect.h);
+      const max = Math.max(0, (this.layout?.height ?? 0) + PAD_TOP * 2 + TITLE_H - this.rect.h);
       this.scrollTarget = clamp(this.scrollTarget + e.deltaY, 0, max);
       this.toolbar = null;
     }, 50));
@@ -302,17 +305,21 @@ export class EditorSurface implements ScreenUiCompositor {
     }, 50));
   }
 
+  /** Doc-space y for a surface-space y (accounts for the title header). */
+  private docY(sy: number): number {
+    return sy - this.rect.y + this.scrollY - PAD_TOP - TITLE_H;
+  }
+
   private posAtSurface(sx: number, sy: number): DocPos {
     if (!this.layout) return { block: 0, offset: 0 };
     const dx = sx - this.rect.x - PAD_X;
-    const dy = sy - this.rect.y + this.scrollY - PAD_TOP;
-    return this.layouter.posAt(this.layout, dx, dy);
+    return this.layouter.posAt(this.layout, dx, this.docY(sy));
   }
 
   private tryToggleTodo(sx: number, sy: number): boolean {
     if (!this.layout) return false;
     const dx = sx - this.rect.x - PAD_X;
-    const dy = sy - this.rect.y + this.scrollY - PAD_TOP;
+    const dy = this.docY(sy);
     if (dx < -26 || dx > -2) return false; // marker column only
     for (const line of this.layout.lines) {
       if (dy < line.y || dy >= line.y + line.height) continue;
@@ -586,7 +593,7 @@ export class EditorSurface implements ScreenUiCompositor {
     const top = rects[0]!;
     const w = TOOLBAR_BTNS.reduce((n, b) => n + b.w, 0) + 12;
     const x = clamp(this.rect.x + PAD_X + top.x, this.rect.x + 4, this.rect.x + this.rect.w - w - 4);
-    const y = Math.max(this.rect.y + 4, this.rect.y + PAD_TOP - this.scrollY + top.y - 38);
+    const y = Math.max(this.rect.y + 4, this.rect.y + PAD_TOP + TITLE_H - this.scrollY + top.y - 38);
     this.toolbar = { rect: { x, y, w, h: 32 } };
   }
 
@@ -854,7 +861,7 @@ export class EditorSurface implements ScreenUiCompositor {
       this.caretShownX += (this.caretX - this.caretShownX) * k;
       this.caretShownY += (this.caretY - this.caretShownY) * k;
       if (snap) { this.caretShownX = this.caretX; this.caretShownY = this.caretY; }
-      const cy = this.caretY + PAD_TOP;
+      const cy = this.caretY + PAD_TOP + TITLE_H;
       const vis = this.rect.h - PAD_TOP;
       if (cy - this.scrollY > vis) this.scrollTarget = cy - vis + 8;
       if (cy - this.scrollY < PAD_TOP) this.scrollTarget = Math.max(0, cy - PAD_TOP - 8);
@@ -881,9 +888,13 @@ export class EditorSurface implements ScreenUiCompositor {
     }
 
     const ox = this.rect.x + PAD_X;
-    const oy = this.rect.y + PAD_TOP - this.scrollY;
+    const oy = this.rect.y + PAD_TOP + TITLE_H - this.scrollY;
     const viewTop = this.rect.y;
     const viewBot = this.rect.y + this.rect.h;
+
+    // Page title header — fixed (doesn't scroll), matches board/canvas views.
+    this.drawTitle(p, t);
+    this.drawPlaceholder(p, t, ox, oy);
 
     // Block-level decorations first (bg must not cover earlier lines' text).
     for (const lb of this.layout.blocks) {
@@ -950,8 +961,10 @@ export class EditorSurface implements ScreenUiCompositor {
         const chunk = this.cache.getChunk(seg.faceKey, seg.sizePx, text);
         if (!chunk || !chunk.region) continue;
         const penX = ox + seg.x;
-        const imgX = penX + chunk.inkX;
-        const imgY = oy + line.baseline - chunk.baselineInBitmap;
+        // Snap the quad origin to whole pixels — a coverage-atlas blit is
+        // sharpest when it lands on integer device pixels.
+        const imgX = Math.round(penX + chunk.inkX);
+        const imgY = Math.round(oy + line.baseline - chunk.baselineInBitmap);
         const color = seg.style.code && block.kind !== "codeblock" ? t.codeText : seg.style.color;
         p.text(imgX, imgY, chunk.w, chunk.h, { region: chunk.region, atlasSize: this.atlas.size }, color);
 
@@ -975,6 +988,42 @@ export class EditorSurface implements ScreenUiCompositor {
     this.renderToolbar(p, t);
 
     p.render(pass, surfaceW, surfaceH, this.atlas, this.time);
+  }
+
+  private pageTitle(): string {
+    const s = store.getState();
+    const p = s.activePageId ? s.pages[s.activePageId] : null;
+    return (p?.title || "").trim();
+  }
+
+  /** Fixed page title above the document column (Notion/AppFlowy style). */
+  private drawTitle(p: GpuTextPass, t: EditorTheme): void {
+    const title = this.pageTitle();
+    const shown = title || "Untitled";
+    const chunk = this.cache.getChunk("inter:600:normal", 24, shown);
+    const run = this.cache.getRun("inter:600:normal", 24, shown);
+    if (!chunk) return;
+    const baseline = this.rect.y + PAD_TOP - 8 + (run?.ascent ?? 19);
+    const color = title ? t.text : t.textMuted;
+    if (chunk.region) {
+      p.text(Math.round(this.rect.x + PAD_X + chunk.inkX), Math.round(baseline - chunk.baselineInBitmap),
+        chunk.w, chunk.h, { region: chunk.region, atlasSize: this.atlas.size }, color);
+    }
+  }
+
+  /** Ghost hint shown where the caret sits when the document is empty —
+   *  keeps fresh pages from looking broken. */
+  private drawPlaceholder(p: GpuTextPass, t: EditorTheme, ox: number, oy: number): void {
+    const empty = this.doc.blocks.length === 0
+      || this.doc.blocks.every((b) => b.spans.every((sp) => !sp.text));
+    if (!empty || !this.layout?.lines.length) return;
+    const hint = "Type '/' for commands, or just start writing";
+    const chunk = this.cache.getChunk("inter:400:normal", 15, hint);
+    if (!chunk?.region) return;
+    const line = this.layout.lines[0]!;
+    const baseline = oy + line.baseline;
+    p.text(Math.round(ox + chunk.inkX), Math.round(baseline - chunk.baselineInBitmap),
+      chunk.w, chunk.h, { region: chunk.region, atlasSize: this.atlas.size }, t.textMuted);
   }
 
   private drawMarker(blockIdx: number, line: { baseline: number; blockStart: number }, ox: number, oy: number, p: GpuTextPass): void {

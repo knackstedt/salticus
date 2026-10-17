@@ -85,9 +85,11 @@ await check("board renders columns", async () => {
   await mcp("open_page", { id: boardId });
 });
 
+let wbId = "";
 await check("create whiteboard page", async () => {
   const p = await mcp("create_page", { type: "whiteboard", title: "Smoke Canvas" });
-  assert(p.id, "got wb id");
+  wbId = p.id as string;
+  assert(wbId, "got wb id");
   await shot("whiteboard");
 });
 
@@ -116,9 +118,46 @@ await check("theme toggle", async () => {
   await mcp("set_theme", { theme: "dark" });
 });
 
+let subId = "";
+await check("nested page (sub-page)", async () => {
+  const sub = await mcp("create_page", { type: "doc", title: "Smoke Subpage", parentId: docId });
+  subId = sub.id as string;
+  assert(subId, "got sub-page id");
+  const st = await mcp("app_state");
+  const parent = (st.pages as Record<string, { children?: string[] }>)[docId];
+  const child = (st.pages as Record<string, { parentId?: string }>)[subId];
+  assert(parent?.children?.includes(subId), "parent lists child");
+  assert(child?.parentId === docId, "child lists parent");
+  await shot("nested");
+});
+
+await check("page thumbnail persisted", async () => {
+  // Thumbs capture ~1.2s after a page renders; the doc was active above.
+  await mcp("open_page", { id: docId });
+  await new Promise((r) => setTimeout(r, 3000));
+  const thumbs = await $`ls ${process.env.HOME}/.config/downdraft-graphic-notes/workspace/thumbs`.quiet().nothrow();
+  assert(thumbs.stdout.toString().includes(`${docId}.png`), `thumb file for ${docId}`);
+});
+
+await check("kanban semibold face registered", async () => {
+  const d = await mcp("text_debug", { face: "inter:600:normal", size: 13, text: "To Do" });
+  const chunk = d.chunk as { w?: number } | undefined;
+  assert(chunk && (chunk.w ?? 0) > 0, "inter:600 chunk has pixels");
+});
+
 await check("persistence: doc saved", async () => {
   const pages = await $`ls ${process.env.HOME}/.config/downdraft-graphic-notes/workspace/pages`.quiet();
   assert(pages.stdout.toString().includes(docId), "doc page file exists");
+});
+
+// Clean up the pages this run created so repeated runs don't pile up clutter.
+await check("cleanup: destroy smoke pages", async () => {
+  for (const id of [docId, boardId, wbId]) {
+    if (id) await mcp("delete_page", { id, hard: true });
+  }
+  const st = await mcp("app_state");
+  const pages = st.pages as Record<string, unknown>;
+  assert(!pages[docId] && !pages[boardId] && !pages[wbId] && !pages[subId], "smoke pages removed");
 });
 
 console.log(failures === 0 ? "\nsmoke: all checks passed" : `\nsmoke: ${failures} failure(s)`);
