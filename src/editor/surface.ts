@@ -99,6 +99,8 @@ export class EditorSurface implements ScreenUiCompositor {
   private focused = false;
   private scrollY = 0;
   private scrollTarget = 0;
+  /** Tracks caret position so scroll-into-view only runs on real moves. */
+  private lastCaretKey = "";
   private caretX = 0;
   private caretY = 0;
   private caretH = 20;
@@ -171,6 +173,10 @@ export class EditorSurface implements ScreenUiCompositor {
     this.history.clear();
     this.slash = null;
     this.toolbar = null;
+    // New document opens scrolled to the top.
+    this.scrollY = 0;
+    this.scrollTarget = 0;
+    this.lastCaretKey = "0:0";
     this.dirty = true;
   }
 
@@ -198,7 +204,12 @@ export class EditorSurface implements ScreenUiCompositor {
       }
       const onText = (e: unknown) => {
         const text = (e as { text?: string }).text;
-        if (text && this.focused) this.insertText(text);
+        if (!text || !this.focused || !this.active) return;
+        if (store.getState().paletteOpen) return;
+        // winit emits "\r" for Enter — keydown already splits the block, so a
+        // textinput that is only newlines would double-split. Drop it.
+        if (/^[\r\n]+$/.test(text)) return;
+        this.insertText(text);
       };
       win.window?.addEventListener?.("textinput", onText);
       this.textInputUnsub = () => win.window?.removeEventListener?.("textinput", onText);
@@ -214,6 +225,19 @@ export class EditorSurface implements ScreenUiCompositor {
 
   focus(): void {
     this.focused = true;
+    this.dirty = true;
+  }
+
+  /** Focus and place the caret at the end of the document — called when a doc
+   *  page activates so typing works without needing a click first. */
+  focusEnd(): void {
+    if (!this.active || this.doc.blocks.length === 0) return;
+    this.focused = true;
+    const last = this.doc.blocks.length - 1;
+    this.caret = { block: last, offset: blockText(this.doc.blocks[last]!).length };
+    this.lastCaretKey = `${this.caret.block}:${this.caret.offset}`;
+    this.anchor = null;
+    this.blinkT = 0;
     this.dirty = true;
   }
 
@@ -353,9 +377,11 @@ export class EditorSurface implements ScreenUiCompositor {
   }
 
   private insertText(text: string): void {
-    for (let ti = 0; ti < text.length; ti++) {
-      const ch = text[ti]!;
-      this.insertChar(ch);
+    // Normalize CR-style line breaks (IME commits, winit textinput) and drop
+    // other control chars that would rasterize as tofu.
+    const clean = text.replace(/\r\n?/g, "\n").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+    for (let ti = 0; ti < clean.length; ti++) {
+      this.insertChar(clean[ti]!);
     }
   }
 
@@ -668,7 +694,7 @@ export class EditorSurface implements ScreenUiCompositor {
   }
 
   private paste(): void {
-    const text = this.clipboardGet();
+    const text = this.clipboardGet().replace(/\r\n?/g, "\n");
     if (!text) return;
     this.mutate("paste");
     if (this.anchor !== null) this.deleteSelection(false);
@@ -861,10 +887,16 @@ export class EditorSurface implements ScreenUiCompositor {
       this.caretShownX += (this.caretX - this.caretShownX) * k;
       this.caretShownY += (this.caretY - this.caretShownY) * k;
       if (snap) { this.caretShownX = this.caretX; this.caretShownY = this.caretY; }
-      const cy = this.caretY + PAD_TOP + TITLE_H;
-      const vis = this.rect.h - PAD_TOP;
-      if (cy - this.scrollY > vis) this.scrollTarget = cy - vis + 8;
-      if (cy - this.scrollY < PAD_TOP) this.scrollTarget = Math.max(0, cy - PAD_TOP - 8);
+      // Keep the caret in view — but only after it actually moves, so opening
+      // a doc (caret placed at end) doesn't yank the scroll position.
+      const ck = `${this.caret.block}:${this.caret.offset}`;
+      if (ck !== this.lastCaretKey) {
+        this.lastCaretKey = ck;
+        const cy = this.caretY + PAD_TOP + TITLE_H;
+        const vis = this.rect.h - PAD_TOP;
+        if (cy - this.scrollY > vis) this.scrollTarget = cy - vis + 8;
+        if (cy - this.scrollY < PAD_TOP + TITLE_H) this.scrollTarget = Math.max(0, cy - PAD_TOP - TITLE_H - 8);
+      }
     }
     if (this.dirty && this.rect.w > 0 && this.cache.ready) {
       this.layout = this.layouter.layout(this.doc, Math.max(80, this.rect.w - PAD_X * 2), this.theme);
@@ -895,6 +927,11 @@ export class EditorSurface implements ScreenUiCompositor {
     // Page title header — fixed (doesn't scroll), matches board/canvas views.
     this.drawTitle(p, t);
     this.drawPlaceholder(p, t, ox, oy);
+
+    // Everything past this point is scrolling body content — scissor-clip it
+    // below the title strip so it can't paint over the header.
+    const bodyStart = p.quadCount;
+    const clipY = this.rect.y + PAD_TOP + TITLE_H - 12;
 
     // Block-level decorations first (bg must not cover earlier lines' text).
     for (const lb of this.layout.blocks) {
@@ -983,11 +1020,17 @@ export class EditorSurface implements ScreenUiCompositor {
       p.roundedRect(ox + this.caretShownX - 1, oy + this.caretShownY, 2, this.caretH, 1, t.caret);
     }
 
-    // Slash menu + format toolbar overlays.
+    const bodyEnd = p.quadCount;
+
+    // Slash menu + format toolbar overlays — unclipped.
     this.renderSlashMenu(p, ox, oy, t);
     this.renderToolbar(p, t);
 
-    p.render(pass, surfaceW, surfaceH, this.atlas, this.time);
+    p.renderRanges(pass, surfaceW, surfaceH, this.atlas, this.time, [
+      { start: 0, end: bodyStart },
+      { start: bodyStart, end: bodyEnd, scissor: [this.rect.x, clipY, this.rect.w, this.rect.y + this.rect.h - clipY] },
+      { start: bodyEnd, end: p.quadCount },
+    ]);
   }
 
   private pageTitle(): string {

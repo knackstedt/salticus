@@ -118,6 +118,8 @@ export function installPageController(views: ViewSurfaces): () => void {
       }
     }
     routeViews();
+    // Docs grab focus on open — typing should work without a click first.
+    if (!p || p.type === "doc") views.editor.focusEnd();
     // Snapshot the freshly rendered page for its sidebar thumbnail.
     requestThumb(id, 1200);
   };

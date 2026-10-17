@@ -123,10 +123,25 @@ export function initWorkspace(): void {
 export function loadPageContent(id: string): PageContent | null {
   try {
     if (!existsSync(pagePath(id))) return null;
-    return JSON.parse(readFileSync(pagePath(id), "utf8")) as PageContent;
+    const c = JSON.parse(readFileSync(pagePath(id), "utf8")) as PageContent;
+    sanitizeDoc(c);
+    return c;
   } catch (e) {
     log.warn("workspace", `page ${id} load failed: ${e}`);
     return null;
+  }
+}
+
+// Stray "\r" chars were persisted by an earlier textinput bug (winit emits
+// "\r" for Enter while keydown already split the block). Strip them from
+// prose blocks; in codeblocks they mean a line break, so map to "\n".
+function sanitizeDoc(c: PageContent): void {
+  if (c.type !== "doc" || !c.doc?.blocks) return;
+  for (const b of c.doc.blocks) {
+    const map = b.kind === "codeblock" ? "\n" : "";
+    for (const sp of b.spans) {
+      if (sp.text.includes("\r")) sp.text = sp.text.replace(/\r\n?/g, map).replace(/\r/g, map);
+    }
   }
 }
 
