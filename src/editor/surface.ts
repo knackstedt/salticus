@@ -440,12 +440,17 @@ export class EditorSurface implements ScreenUiCompositor {
   }
 
   /** Raw single-char insert at caret (no markdown/slash handling). */
-  private insertRaw(text: string): void {
+  private insertRaw(text: string, styled = true): void {
     if (this.anchor !== null) this.deleteSelection(false);
     const b = this.blockOf(this.caret);
     if (!b) return;
+    const applyPending = (start: number) => {
+      const ps = styled ? this.pendingStyle() : null;
+      if (ps) styleRange(b, start, start + text.length, ps);
+    };
     if (b.spans.length === 0) {
       b.spans.push({ text, style: { family: "inter", weight: 400, italic: false, sizePx: 16, color: this.theme.text } });
+      applyPending(0);
       this.caret = { block: this.caret.block, offset: text.length };
       return;
     }
@@ -455,6 +460,7 @@ export class EditorSurface implements ScreenUiCompositor {
       if (this.caret.offset <= off + sp.text.length || i === b.spans.length - 1) {
         const inner = clamp(this.caret.offset - off, 0, sp.text.length);
         sp.text = sp.text.slice(0, inner) + text + sp.text.slice(inner);
+        applyPending(off + inner);
         this.caret = { block: this.caret.block, offset: off + inner + text.length };
         return;
       }
@@ -524,6 +530,63 @@ export class EditorSurface implements ScreenUiCompositor {
         b.kind = "paragraph"; // backspace at start unstyles the block
       }
     }
+    this.inserted();
+  }
+
+  /** Word-boundary scan helpers — skip whitespace, then same-class chars. */
+  private wordBack(pos: DocPos): DocPos {
+    let { block, offset } = pos;
+    while (block >= 0) {
+      const t = blockText(this.doc.blocks[block]!);
+      let i = offset;
+      while (i > 0 && /\s/.test(t[i - 1]!)) i--;
+      const cls = (c: string) => /\w/.test(c);
+      if (i > 0) { const c = cls(t[i - 1]!); while (i > 0 && !/\s/.test(t[i - 1]!) && cls(t[i - 1]!) === c) i--; }
+      if (i !== offset || block === 0) return { block, offset: i };
+      block--; offset = blockText(this.doc.blocks[block]!).length;
+    }
+    return { block: 0, offset: 0 };
+  }
+
+  private wordForward(pos: DocPos): DocPos {
+    let { block, offset } = pos;
+    while (block < this.doc.blocks.length) {
+      const t = blockText(this.doc.blocks[block]!);
+      let i = offset;
+      const cls = (c: string) => /\w/.test(c);
+      if (i < t.length) { const c = cls(t[i]!); while (i < t.length && !/\s/.test(t[i]!) && cls(t[i]!) === c) i++; }
+      while (i < t.length && /\s/.test(t[i]!)) i++;
+      if (i !== offset || block === this.doc.blocks.length - 1) return { block, offset: i };
+      block++; offset = 0;
+    }
+    const last = this.doc.blocks.length - 1;
+    return { block: last, offset: blockText(this.doc.blocks[last]!).length };
+  }
+
+  private moveWord(dir: -1 | 1, shift: boolean): void {
+    this.extendSelection(shift);
+    this.caret = dir < 0 ? this.wordBack(this.caret) : this.wordForward(this.caret);
+    this.goalX = null;
+    this.blinkT = 0;
+    this.dirty = true;
+  }
+
+  private backspaceWord(): void {
+    if (this.anchor !== null) { this.deleteSelection(); return; }
+    const start = this.wordBack(this.caret);
+    if (start.block !== this.caret.block) { this.backspace(); return; }
+    this.mutate("delete");
+    spliceSpans(this.blockOf(this.caret)!, start.offset, this.caret.offset - start.offset);
+    this.caret = start;
+    this.inserted();
+  }
+
+  private deleteWordForward(): void {
+    if (this.anchor !== null) { this.deleteSelection(); return; }
+    const end = this.wordForward(this.caret);
+    if (end.block !== this.caret.block) { this.forwardDelete(); return; }
+    this.mutate("delete");
+    spliceSpans(this.blockOf(this.caret)!, this.caret.offset, end.offset - this.caret.offset);
     this.inserted();
   }
 
@@ -613,8 +676,9 @@ export class EditorSurface implements ScreenUiCompositor {
 
   private showToolbar(): void {
     if (!this.layout || this.anchor === null) return;
-    const a = docCompare(this.anchor, this.caret) <= 0 ? this.anchor : this.caret;
-    const rects = this.layouter.selectionRects(this.layout, a, this.caret);
+    const [a, b] = docCompare(this.anchor, this.caret) <= 0
+      ? [this.anchor, this.caret] : [this.caret, this.anchor];
+    const rects = this.layouter.selectionRects(this.layout, a, b);
     if (rects.length === 0) return;
     const top = rects[0]!;
     const w = TOOLBAR_BTNS.reduce((n, b) => n + b.w, 0) + 12;
@@ -635,8 +699,30 @@ export class EditorSurface implements ScreenUiCompositor {
     }
   }
 
+  /** Format toggles armed with no selection — applied to subsequently typed
+   *  text (standard Ctrl+B-then-type behavior). */
+  private pending: Partial<Record<string, boolean>> | null = null;
+
+  private pendingStyle(): Partial<TextStyle> | null {
+    if (!this.pending) return null;
+    const st: Partial<TextStyle> = {};
+    if (this.pending.bold) st.weight = 700;
+    if (this.pending.italic) st.italic = true;
+    if (this.pending.underline) st.underline = true;
+    if (this.pending.strike) st.strikethrough = true;
+    if (this.pending.code) st.code = true;
+    return Object.keys(st).length ? st : null;
+  }
+
   private applyFormat(id: string): void {
-    if (this.anchor === null) return;
+    if (this.anchor === null) {
+      // No selection — toggle the pending typing style.
+      const p = { ...(this.pending ?? {}), [id]: !(this.pending?.[id]) };
+      this.pending = Object.values(p).some(Boolean) ? p : null;
+      this.blinkT = 0;
+      this.dirty = true;
+      return;
+    }
     const patch: Partial<TextStyle> =
       id === "bold" ? { weight: 700 } :
       id === "italic" ? { italic: true } :
@@ -700,10 +786,10 @@ export class EditorSurface implements ScreenUiCompositor {
     if (this.anchor !== null) this.deleteSelection(false);
     const lines = text.split("\n");
     if (lines.length === 1) {
-      this.insertRaw(lines[0]!);
+      this.insertRaw(lines[0]!, false);
     } else {
       // First line into current block; rest become new blocks.
-      this.insertRaw(lines[0]!);
+      this.insertRaw(lines[0]!, false);
       const b = this.blockOf(this.caret)!;
       const tail = takeSpansFrom(b, this.caret.offset);
       const baseStyle = b.spans[0]?.style ?? tail[0]?.style ?? {
@@ -764,6 +850,11 @@ export class EditorSurface implements ScreenUiCompositor {
       // Fall through to typing.
     }
     if (e.ctrlKey || e.metaKey) {
+      // Word-level nav/edit first — these keys aren't letters.
+      if (k === "Backspace") { this.backspaceWord(); return true; }
+      if (k === "Delete") { this.deleteWordForward(); return true; }
+      if (k === "ArrowLeft") { this.moveWord(-1, e.shiftKey); return true; }
+      if (k === "ArrowRight") { this.moveWord(1, e.shiftKey); return true; }
       switch ((k ?? "").toLowerCase()) {
         case "a": this.selectAll(); return true;
         case "c": this.copy(false); return true;
@@ -774,6 +865,8 @@ export class EditorSurface implements ScreenUiCompositor {
         case "b": this.applyFormat("bold"); return true;
         case "i": this.applyFormat("italic"); return true;
         case "u": this.applyFormat("underline"); return true;
+        case "e": this.applyFormat("code"); return true;
+        case "s": if (e.shiftKey) { this.applyFormat("strike"); return true; } return false;
         default: return false;
       }
     }
@@ -781,7 +874,7 @@ export class EditorSurface implements ScreenUiCompositor {
       case "Backspace": this.backspace(); return true;
       case "Delete": this.forwardDelete(); return true;
       case "Enter": this.splitBlock(); return true;
-      case "Escape": this.slash = null; this.toolbar = null; this.anchor = null; this.dirty = true; return true;
+      case "Escape": this.slash = null; this.toolbar = null; this.anchor = null; this.pending = null; this.dirty = true; return true;
       case "ArrowLeft": this.moveCaret(-1, e.shiftKey); return true;
       case "ArrowRight": this.moveCaret(1, e.shiftKey); return true;
       case "ArrowUp": this.moveLine(-1, e.shiftKey); return true;
@@ -790,11 +883,10 @@ export class EditorSurface implements ScreenUiCompositor {
       case "End": this.moveEnd(e.shiftKey); return true;
       case "Tab": this.mutate("type"); this.insertRaw("  "); this.inserted(); return true;
       default:
-        if (k === " ") { this.insertChar(" "); return true; }
-        if (k && k.length === 1) {
-          // With native text input active, real typing arrives via
-          // textinput — keydown chars only serve synthetic events.
-          if (!this.textInputActive) this.insertChar(k);
+        // With native text input active, printable chars (including space)
+        // arrive via textinput — keydown chars only serve synthetic events.
+        if (k && k.length === 1 && !this.textInputActive) {
+          this.insertChar(k);
           return true;
         }
         return false;
@@ -947,9 +1039,12 @@ export class EditorSurface implements ScreenUiCompositor {
       }
     }
 
-    // Selection — under the text.
+    // Selection — under the text. Anchor may trail the caret (backwards
+    // selection) — normalize the ends before asking the layouter.
     if (this.anchor !== null) {
-      const rects = this.layouter.selectionRects(this.layout, this.anchor, this.caret);
+      const [a, b] = docCompare(this.anchor, this.caret) <= 0
+        ? [this.anchor, this.caret] : [this.caret, this.anchor];
+      const rects = this.layouter.selectionRects(this.layout, a, b);
       for (const r of rects) {
         p.rect(ox + r.x, oy + r.y, Math.max(2, r.w), r.h, t.selection);
       }

@@ -6,7 +6,7 @@
 
 import { newId } from "../app/store";
 
-export type WbItemKind = "stroke" | "rect" | "ellipse" | "line" | "text" | "sticky";
+export type WbItemKind = "stroke" | "rect" | "ellipse" | "diamond" | "line" | "arrow" | "text" | "sticky";
 
 export interface WbItem {
   id: string;
@@ -55,7 +55,9 @@ export function demoWhiteboard(): WbContent {
       { id: newId("wb"), kind: "text", x: 300, y: 215, w: 0, h: 0, color: 0, size: 18,
         text: "Shapes, strokes, stickies" },
       { id: newId("wb"), kind: "ellipse", x: 560, y: 90, w: 150, h: 110, color: 1, size: 2 },
+      { id: newId("wb"), kind: "diamond", x: 750, y: 90, w: 110, h: 110, color: 4, size: 2 },
       { id: newId("wb"), kind: "line", x: 300, y: 260, w: 400, h: 0, color: 2, size: 2 },
+      { id: newId("wb"), kind: "arrow", x: 710, y: 150, w: -190, h: 90, color: 5, size: 2 },
     ],
   };
 }

@@ -20,7 +20,9 @@ const TOOLS: { id: Tool; label: string }[] = [
   { id: "select", label: "Select" },
   { id: "pen", label: "Pen" },
   { id: "rect", label: "Rect" },
+  { id: "diamond", label: "Diamond" },
   { id: "ellipse", label: "Ellipse" },
+  { id: "arrow", label: "Arrow" },
   { id: "line", label: "Line" },
   { id: "text", label: "Text" },
   { id: "sticky", label: "Sticky" },
@@ -50,7 +52,76 @@ function hex(s: string): Rgba {
   return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255, a];
 }
 
-type Tool = "select" | "pen" | "rect" | "ellipse" | "line" | "text" | "sticky";
+// ── Sketchy strokes (Excalidraw-style) ─────────────────────────────────────
+// Each item renders its outline as jittered polylines, twice, from a seed
+// derived from the item id — the classic hand-drawn double-stroke. Seeding is
+// deterministic so the wobble doesn't flicker between frames or sessions.
+
+function hash32(s: string): number {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = (h * 33 ^ s.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Subdivide an edge and jitter interior points perpendicular to it. */
+function roughEdge(x0: number, y0: number, x1: number, y1: number, rnd: () => number, jitter: number, out: number[]): void {
+  const len = Math.hypot(x1 - x0, y1 - y0);
+  const n = Math.max(1, Math.min(10, Math.round(len / 45)));
+  for (let i = out.length ? 1 : 0; i <= n; i++) {
+    const t = i / n;
+    const end = i === 0 || i === n;
+    const j = end ? jitter * 0.35 : jitter;
+    out.push(
+      x0 + (x1 - x0) * t + (rnd() - 0.5) * 2 * j,
+      y0 + (y1 - y0) * t + (rnd() - 0.5) * 2 * j,
+    );
+  }
+}
+
+/** Jittered closed/open polyline for an item. `closed` joins last→first. */
+function roughPolyline(corners: [number, number][], seed: string, passIdx: number, jitter: number, closed: boolean): number[] {
+  const rnd = mulberry32(hash32(seed) + passIdx * 7919);
+  const pts: number[] = [];
+  const n = corners.length;
+  const edges = closed ? n : n - 1;
+  for (let i = 0; i < edges; i++) {
+    const [x0, y0] = corners[i]!;
+    const [x1, y1] = corners[(i + 1) % n]!;
+    roughEdge(x0, y0, x1, y1, rnd, jitter, pts);
+  }
+  if (!closed) return pts;
+  pts.push(pts[0]!, pts[1]!);
+  return pts;
+}
+
+/** Parametric ellipse outline sampled as a jittered closed polyline. */
+function roughEllipse(cx: number, cy: number, rx: number, ry: number, seed: string, passIdx: number, jitter: number): number[] {
+  const rnd = mulberry32(hash32(seed) + passIdx * 7919 + 13);
+  const n = 26;
+  const pts: number[] = [];
+  for (let i = 0; i <= n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    const j = (i === 0 || i === n) ? jitter * 0.3 : jitter;
+    pts.push(
+      cx + Math.cos(a) * (rx + (rnd() - 0.5) * 2 * j),
+      cy + Math.sin(a) * (ry + (rnd() - 0.5) * 2 * j),
+    );
+  }
+  return pts;
+}
+
+type Tool = "select" | "pen" | "rect" | "diamond" | "ellipse" | "arrow" | "line" | "text" | "sticky";
 
 interface DraftState {
   kind: "pen" | "shape" | "move" | "pan";
@@ -184,7 +255,9 @@ export class WhiteboardSurface implements ScreenUiCompositor {
           break;
         }
         case "rect":
+        case "diamond":
         case "ellipse":
+        case "arrow":
         case "line": {
           const item = newWbItem(this.tool, wx, wy, this.colorIdx, 2);
           this.draft = { kind: "shape", item, startX: wx, startY: wy, sx0: e.clientX, sy0: e.clientY, lastX: wx, lastY: wy, moved: false };
@@ -328,7 +401,7 @@ export class WhiteboardSurface implements ScreenUiCompositor {
         ctrl.stopPropagation();
       }
       // Tool shortcuts: v p r o l t s
-      const toolKeys: Record<string, Tool> = { v: "select", p: "pen", r: "rect", o: "ellipse", l: "line", t: "text", s: "sticky" };
+      const toolKeys: Record<string, Tool> = { v: "select", p: "pen", r: "rect", d: "diamond", o: "ellipse", a: "arrow", l: "line", t: "text", s: "sticky" };
       const tk = toolKeys[e.key.toLowerCase()];
       if (tk) { this.tool = tk; ctrl.stopPropagation(); }
     }, 60));
@@ -347,11 +420,13 @@ export class WhiteboardSurface implements ScreenUiCompositor {
       const it = this.wb.items[i]!;
       switch (it.kind) {
         case "rect":
+        case "diamond":
         case "ellipse":
         case "sticky":
           if (wx >= it.x - 4 && wx <= it.x + it.w + 4 && wy >= it.y - 4 && wy <= it.y + it.h + 4) return it;
           break;
         case "line":
+        case "arrow":
           if (distToSeg(wx, wy, it.x, it.y, it.x + it.w, it.y + it.h) < 8) return it;
           break;
         case "stroke": {
@@ -526,24 +601,54 @@ export class WhiteboardSurface implements ScreenUiCompositor {
         const w = it.w * z, h = it.h * z;
         const x = Math.min(sx, sx + w), y = Math.min(sy, sy + h);
         const aw = Math.abs(w), ah = Math.abs(h);
-        const lw = Math.max(1, it.size * z);
-        // Outline via 4 rects? Rounded rect stroke not supported — draw thin outline as 4 rects.
-        p.rect(x, y, aw, lw, color);
-        p.rect(x, y + ah - lw, aw, lw, color);
-        p.rect(x, y, lw, ah, color);
-        p.rect(x + aw - lw, y, lw, ah, color);
+        const lw = Math.max(1, it.size * z * 0.85);
+        const corners: [number, number][] = [[x, y], [x + aw, y], [x + aw, y + ah], [x, y + ah]];
+        for (let i = 0; i < 2; i++) {
+          p.stroke(roughPolyline(corners, it.id, i, Math.min(1.4, aw * 0.04 + 0.5) , true), lw, color);
+        }
+        break;
+      }
+      case "diamond": {
+        const w = it.w * z, h = it.h * z;
+        const x = Math.min(sx, sx + w), y = Math.min(sy, sy + h);
+        const aw = Math.abs(w), ah = Math.abs(h);
+        const lw = Math.max(1, it.size * z * 0.85);
+        const corners: [number, number][] = [
+          [x + aw / 2, y], [x + aw, y + ah / 2], [x + aw / 2, y + ah], [x, y + ah / 2],
+        ];
+        for (let i = 0; i < 2; i++) {
+          p.stroke(roughPolyline(corners, it.id, i, Math.min(1.4, (aw + ah) * 0.02 + 0.5), true), lw, color);
+        }
         break;
       }
       case "ellipse": {
         const x = Math.min(sx, sx + it.w * z), y = Math.min(sy, sy + it.h * z);
         const aw = Math.abs(it.w * z), ah = Math.abs(it.h * z);
-        const lw = Math.max(1, it.size * z);
-        p.ellipse(x, y, aw, ah, color);
-        p.ellipse(x + lw, y + lw, Math.max(0.1, aw - lw * 2), Math.max(0.1, ah - lw * 2), hex(this.t().bg));
+        const lw = Math.max(1, it.size * z * 0.85);
+        for (let i = 0; i < 2; i++) {
+          p.stroke(roughEllipse(x + aw / 2, y + ah / 2, aw / 2, ah / 2, it.id, i, Math.min(1.3, aw * 0.03 + 0.4)), lw, color);
+        }
         break;
       }
-      case "line": {
-        p.capsule(sx, sy, sx + it.w * z, sy + it.h * z, Math.max(1, it.size * z), color);
+      case "line":
+      case "arrow": {
+        const ex = sx + it.w * z, ey = sy + it.h * z;
+        const lw = Math.max(1, it.size * z * 0.85);
+        const len = Math.hypot(ex - sx, ey - sy);
+        for (let i = 0; i < 2; i++) {
+          p.stroke(roughPolyline([[sx, sy], [ex, ey]], it.id, i, Math.min(1.2, len * 0.02 + 0.3), false), lw, color);
+        }
+        if (it.kind === "arrow" && len > 4) {
+          const ang = Math.atan2(ey - sy, ex - sx);
+          const hl = Math.min(20 * z + lw * 3, len * 0.4);
+          for (const off of [0.5, -0.5]) {
+            const hx = ex - Math.cos(ang + off) * hl;
+            const hy = ey - Math.sin(ang + off) * hl;
+            for (let i = 0; i < 2; i++) {
+              p.stroke(roughPolyline([[hx, hy], [ex, ey]], it.id + "h" + (off > 0 ? "a" : "b"), i, 0.5, false), lw, color);
+            }
+          }
+        }
         break;
       }
       case "text": {
@@ -567,6 +672,11 @@ export class WhiteboardSurface implements ScreenUiCompositor {
         const bg = STICKY_COLORS[it.color % STICKY_COLORS.length]!;
         p.roundedRect(sx + 3, sy + 4, w, h, 6, [0, 0, 0, 0.3]);
         p.roundedRect(sx, sy, w, h, 6, bg);
+        // Hand-drawn border to match the sketchy theme.
+        const corners: [number, number][] = [[sx, sy], [sx + w, sy], [sx + w, sy + h], [sx, sy + h]];
+        for (let i = 0; i < 2; i++) {
+          p.stroke(roughPolyline(corners, it.id, i, 0.9, true), Math.max(1, 1.1 * z), [0.95, 0.95, 0.97, 0.55]);
+        }
         p.roundedRect(sx, sy, w, Math.min(h, 26 * z), 6, [1, 1, 1, 0.06]);
         const str = editingThis ? this.editing!.text : (it.text ?? "");
         const sizePx = Math.max(6, it.size * z);
@@ -593,7 +703,7 @@ export class WhiteboardSurface implements ScreenUiCompositor {
     this.toolRects = [];
     this.swatchRects = [];
 
-    p.roundedRect(tx + 10, ty + 6, Math.min(this.rect.w - 20, 402), 32, 8, hex(t.bgElev));
+    p.roundedRect(tx + 10, ty + 6, Math.min(this.rect.w - 20, 474), 32, 8, hex(t.bgElev));
     let x = tx + 16;
     for (const tl of TOOLS) {
       const active = this.tool === tl.id;
@@ -622,7 +732,7 @@ export class WhiteboardSurface implements ScreenUiCompositor {
     this.text(this.rect.x + this.rect.w - 60 + (48 - this.measure("inter:400:normal", 11, pct)) / 2,
       ty + 16, "inter:400:normal", 11, pct, hex(t.textDim));
 
-    const hint = "V select · P pen · R rect · O ellipse · L line · T text · S sticky · drag empty space pans · ctrl+wheel zooms";
+    const hint = "V select · P pen · R rect · D diamond · O ellipse · A arrow · L line · T text · S sticky · drag pans · ctrl+wheel zooms";
     this.text(tx + 16, ty + TOOLBAR_H - 2, "inter:400:normal", 10, hint, hex(t.textFaint));
   }
 
@@ -644,9 +754,20 @@ export class WhiteboardSurface implements ScreenUiCompositor {
         p.roundedRect(cx - 6, cy - 5, 12, 10, 1.5, c);
         p.roundedRect(cx - 4.8, cy - 3.8, 9.6, 7.6, 1, hex(this.t().bgElev));
         break;
+      case "diamond": // ◇ via 4 capsule edges
+        p.capsule(cx, cy - 6, cx + 6, cy, 1.2, c);
+        p.capsule(cx + 6, cy, cx, cy + 6, 1.2, c);
+        p.capsule(cx, cy + 6, cx - 6, cy, 1.2, c);
+        p.capsule(cx - 6, cy, cx, cy - 6, 1.2, c);
+        break;
       case "ellipse":
         p.ellipse(cx - 6, cy - 5, 12, 10, c);
         p.ellipse(cx - 4.8, cy - 3.8, 9.6, 7.6, hex(this.t().bgElev));
+        break;
+      case "arrow": // → line with head
+        p.capsule(cx - 6, cy + 5, cx + 5, cy - 5, 1.4, c);
+        p.capsule(cx + 5, cy - 5, cx + 1, cy - 5.4, 1.2, c);
+        p.capsule(cx + 5, cy - 5, cx + 5.6, cy - 1.4, 1.2, c);
         break;
       case "line":
         p.capsule(cx - 6, cy + 6, cx + 6, cy - 6, 1.4, c);
