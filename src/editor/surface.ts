@@ -4,18 +4,23 @@
 // A ScreenUiCompositor drawn underneath the html-ui chrome (order -10):
 // owns the run cache/atlas/quad pass, lays out the document, renders
 // visible lines + decorations + selection + animated caret + overlays
-// (slash menu, format toolbar), and handles pointer/wheel/key input.
+// (slash menu, format toolbar, scrollbar), and handles pointer/wheel/key
+// input.
 //
 // Coordinates: surface pixels (y-down), same space the input bus reports.
 // Document space = surface coords minus origin, plus scroll.
+//
+// Animations (all toggleable via setAnimationsEnabled): block flash on
+// markdown/slash transforms, todo checkbox pop, slash menu + toolbar rise-in,
+// scrollbar fade.
 // ============================================================================
 
 import type { ScreenUiCompositor, RendererModuleContext } from "@downdraft/engine/module/renderer-module";
 import { GpuTextPass, type Rgba } from "../text/gpu-text";
 import { TextAtlas } from "../text/atlas";
 import { RunCache } from "../text/run-cache";
-import { DocLayouter, type DocLayout, type EditorTheme } from "./layout";
-import { docCompare, blockText, newBlockId, type Block, type Doc, type DocPos, type Span, type TextStyle } from "./model";
+import { DocLayouter, type DocLayout, type EditorTheme, type LaidLine, type LaidSegment } from "./layout";
+import { docCompare, blockText, newBlockId, type Block, type BlockKind, type Doc, type DocPos, type Span, type TextStyle } from "./model";
 import { History } from "./history";
 import { matchBlockShortcut, matchInlineShortcut, inlineMarkerLen, stripBlockPrefix, styleRange } from "./markdown";
 import { darkSyntax, lightSyntax } from "./highlight";
@@ -28,8 +33,15 @@ const PAD_X = 56;
 const PAD_TOP = 28;
 /** Height of the fixed page-title header above the scrolling doc. */
 const TITLE_H = 44;
+/** Breathing room below the last block in the scroll range. */
+const PAD_BOTTOM = 48;
 const SCROLL_LERP = 14;   // /s — exponential smoothing rate
 const CARET_LERP = 22;
+
+// Animation timings (seconds).
+const FLASH_DUR = 0.45;     // block highlight after a markdown/slash transform
+const CHECK_DUR = 0.28;     // todo checkbox pop
+const POP_DUR = 0.13;       // slash menu / toolbar rise-in
 
 export interface EditorRect { x: number; y: number; w: number; h: number }
 
@@ -57,6 +69,8 @@ interface SlashState {
   items: SlashItem[];
   /** Screen-space rect — set during render for hit testing. */
   rect: { x: number; y: number; w: number; h: number } | null;
+  /** Surface time when the menu opened (rise-in animation). */
+  t0: number;
 }
 
 // ── Format toolbar ──────────────────────────────────────────────────────────
@@ -72,7 +86,39 @@ const TOOLBAR_BTNS: ToolbarBtn[] = [
 
 interface ToolbarState {
   rect: { x: number; y: number; w: number; h: number };
+  /** Surface time when the toolbar appeared (pop-in animation). */
+  t0: number;
+  /** Selection bounds the rect was positioned for — repositioned lazily
+   *  when the selection keeps growing (keyboard shift-selection). */
+  forA: DocPos;
+  forB: DocPos;
 }
+
+// ── Context menu / block actions ─────────────────────────────────────────────
+
+type MenuRow = { id: string; label: string; hint?: string; disabled?: boolean } | { sep: true };
+
+interface CtxMenuState {
+  rows: MenuRow[];
+  index: number;
+  /** Screen-space rect — set during render for hit testing. */
+  rect: { x: number; y: number; w: number; h: number } | null;
+  /** "Turn into" submenu. */
+  subOpen: boolean;
+  subIndex: number;
+  subRect: { x: number; y: number; w: number; h: number } | null;
+  /** Doc position where the menu was invoked — target for block ops. */
+  pos: DocPos;
+  x: number;
+  y: number;
+  t0: number;
+}
+
+const MENU_W = 216;
+const MENU_ROW_H = 26;
+const MENU_SEP_H = 9;
+const MENU_PAD = 6;
+const SUB_W = 204;
 
 export class EditorSurface implements ScreenUiCompositor {
   order = -10;
@@ -95,7 +141,7 @@ export class EditorSurface implements ScreenUiCompositor {
 
   // Interaction state.
   caret: DocPos = { block: 0, offset: 0 };
-  private anchor: DocPos | null = null;
+  anchor: DocPos | null = null;
   private focused = false;
   private scrollY = 0;
   private scrollTarget = 0;
@@ -109,9 +155,38 @@ export class EditorSurface implements ScreenUiCompositor {
   private blinkT = 0;
   private goalX: number | null = null;
   private dragging = false;
+  /** Last pointer position while drag-selecting — drives edge auto-scroll. */
+  private dragX = 0;
+  private dragY = 0;
+  /** Scrollbar drag (pointer grabbed the scrollbar lane). */
+  private scrollDrag = false;
+  /** Last time scroll was active — scrollbar fades in/out around it. */
+  private scrollActiveT = -10;
+  /** Double/triple click tracking for word/paragraph selection. */
+  private clickN = 0;
+  private clickT = -1;
+  private clickPX = 0;
+  private clickPY = 0;
   private dirty = true;
   private time = 0;
   private textInputActive = false;
+
+  // ── Context menu + block drag ─────────────────────────────────────────────
+  private ctxMenu: CtxMenuState | null = null;
+  /** Block under the pointer — drives the gutter drag grip (-1 = none). */
+  private hoverBlock = -1;
+  /** Grip hit rect — set during render, like slash.rect. */
+  private gripRect: { x: number; y: number; w: number; h: number } | null = null;
+  private gripHot = false;
+  /** Active block drag (grip grabbed, moving to a new slot). */
+  private blockDrag: { src: number; insert: number; downY: number; moved: boolean } | null = null;
+
+  // ── Animation state (all gated by animationsOn) ──────────────────────────
+  private animationsOn = true;
+  /** Block highlight after a markdown/slash transform. */
+  private flashAnim: { block: string; t0: number } | null = null;
+  /** Todo checkbox pop after a toggle. */
+  private todoAnim: { block: string; checked: boolean; t0: number } | null = null;
 
   onChange: (() => void) | null = null;
 
@@ -149,11 +224,19 @@ export class EditorSurface implements ScreenUiCompositor {
     this.dirty = true;
   }
 
+  /** Toggle all cosmetic animations (typewriter pop, flashes, pop-ins). */
+  setAnimationsEnabled(on: boolean): void {
+    this.animationsOn = on;
+    if (!on) {
+      this.flashAnim = null;
+      this.todoAnim = null;
+    }
+  }
+
   setActive(a: boolean): void {
     if (this.active === a) return;
     this.active = a;
-    if (!a) { this.focused = false; this.slash = null; this.toolbar = null; }
-    this.dirty = true;
+    if (!a) { this.focused = false; this.slash = null; this.toolbar = null; this.ctxMenu = null; this.blockDrag = null; this.hoverBlock = -1; }
   }
 
   get isActive(): boolean {
@@ -167,12 +250,20 @@ export class EditorSurface implements ScreenUiCompositor {
   }
 
   setDoc(doc: Doc): void {
-    this.doc = doc;
+    // A doc always has ≥1 block so the caret has somewhere to land.
+    this.doc = doc.blocks.length ? doc : { blocks: [{ id: newBlockId(), kind: "paragraph", spans: [] }] };
     this.caret = { block: 0, offset: 0 };
     this.anchor = null;
     this.history.clear();
     this.slash = null;
     this.toolbar = null;
+    this.ctxMenu = null;
+    this.blockDrag = null;
+    this.hoverBlock = -1;
+    this.pending = null;
+    this.flashAnim = null;
+    this.todoAnim = null;
+    this.renumberLists();
     // New document opens scrolled to the top.
     this.scrollY = 0;
     this.scrollTarget = 0;
@@ -225,7 +316,6 @@ export class EditorSurface implements ScreenUiCompositor {
 
   focus(): void {
     this.focused = true;
-    this.dirty = true;
   }
 
   /** Focus and place the caret at the end of the document — called when a doc
@@ -238,7 +328,6 @@ export class EditorSurface implements ScreenUiCompositor {
     this.lastCaretKey = `${this.caret.block}:${this.caret.offset}`;
     this.anchor = null;
     this.blinkT = 0;
-    this.dirty = true;
   }
 
   // ── Input ────────────────────────────────────────────────────────────────
@@ -251,6 +340,29 @@ export class EditorSurface implements ScreenUiCompositor {
       y >= this.rect.y && y <= this.rect.y + this.rect.h;
 
     this.unsubs.push(bus.onPointerDown((e, ctrl) => {
+      this.scrollDrag = false;
+      // Context menu eats its own clicks first.
+      if (this.ctxMenu) {
+        const m = this.ctxMenu;
+        if (m.subOpen && m.subRect && inside(e.clientX, e.clientY, m.subRect)) {
+          ctrl.stopPropagation();
+          const idx = Math.floor((e.clientY - m.subRect.y - MENU_PAD) / MENU_ROW_H);
+          const item = SLASH_ITEMS[idx];
+          if (item) this.applyTurnInto(item.kind);
+          return;
+        }
+        if (m.rect && inside(e.clientX, e.clientY, m.rect)) {
+          ctrl.stopPropagation();
+          const hit = this.menuRowAt(m, e.clientY);
+          const row = hit >= 0 ? m.rows[hit]! : null;
+          if (row && !("sep" in row) && !row.disabled) {
+            if (row.id === "turn") { m.subOpen = true; m.subIndex = 0; m.index = hit; }
+            else this.ctxAction(row.id);
+          }
+          return;
+        }
+        this.ctxMenu = null; // click outside dismisses (a right-click re-opens below)
+      }
       // Overlays eat their own clicks first.
       if (this.slash?.rect && inside(e.clientX, e.clientY, this.slash.rect)) {
         ctrl.stopPropagation();
@@ -264,14 +376,52 @@ export class EditorSurface implements ScreenUiCompositor {
         return;
       }
       if (!inRect(e.clientX, e.clientY)) {
-        if (this.focused) { this.focused = false; this.history.barrier(); this.dirty = true; }
+        if (this.focused) { this.focused = false; this.history.barrier(); }
         this.slash = null;
         return;
       }
       ctrl.stopPropagation();
+
+      // Right click — context menu. A right-click inside the live selection
+      // keeps it (standard editor behavior); elsewhere the caret moves.
+      if (e.button === 2) {
+        this.focused = true;
+        this.slash = null;
+        this.toolbar = null;
+        const pos = this.posAtSurface(e.clientX, e.clientY);
+        const sel = this.selRange();
+        const insideSel = sel !== null && docCompare(sel[0], pos) <= 0 && docCompare(pos, sel[1]) <= 0;
+        if (!insideSel) {
+          this.caret = pos;
+          this.anchor = null;
+        }
+        this.dragging = false;
+        this.blinkT = 0;
+        this.openCtxMenu(e.clientX, e.clientY, pos, "text");
+        return;
+      }
+      if (e.button !== 0) return; // middle/aux buttons don't place a caret
+
+      // Scrollbar lane — right edge of the surface, when content overflows.
+      if (this.maxScroll() > 0 && e.clientX >= this.rect.x + this.rect.w - 14) {
+        this.scrollDrag = true;
+        this.scrollActiveT = this.time;
+        this.scrollbarJump(e.clientY);
+        return;
+      }
+
       this.focused = true;
       this.slash = null;
       this.toolbar = null;
+
+      // Gutter drag grip — starts a block move instead of a caret click.
+      if (this.gripRect && inside(e.clientX, e.clientY, this.gripRect) && this.hoverBlock >= 0) {
+        this.blockDrag = { src: this.hoverBlock, insert: this.hoverBlock, downY: e.clientY, moved: false };
+        this.dragX = e.clientX;
+        this.dragY = e.clientY;
+        this.anchor = null;
+        return;
+      }
 
       // Todo checkbox hit?
       const pos = this.posAtSurface(e.clientX, e.clientY);
@@ -279,7 +429,26 @@ export class EditorSurface implements ScreenUiCompositor {
         this.dragging = false;
         return;
       }
+      this.dragX = e.clientX;
+      this.dragY = e.clientY;
+
+      // Multi-click: double = word, triple+ = whole block.
+      const near = Math.abs(e.clientX - this.clickPX) < 8 && Math.abs(e.clientY - this.clickPY) < 8;
+      this.clickN = near && this.time - this.clickT < 0.5 ? this.clickN + 1 : 1;
+      this.clickT = this.time;
+      this.clickPX = e.clientX;
+      this.clickPY = e.clientY;
+      if (!e.shiftKey && this.clickN >= 2) {
+        this.pending = null;
+        if (this.clickN === 2) this.selectWordAt(pos);
+        else this.selectBlockAt(pos);
+        this.dragging = false;
+        this.blinkT = 0;
+        return;
+      }
+
       this.dragging = true;
+      this.pending = null;
       if (e.shiftKey && this.anchor === null) this.anchor = { ...this.caret };
       if (e.shiftKey) {
         this.caret = pos;
@@ -289,27 +458,80 @@ export class EditorSurface implements ScreenUiCompositor {
       }
       this.blinkT = 0;
       this.goalX = null;
-      this.dirty = true;
     }, 50));
 
     this.unsubs.push(bus.onDrag((_d, ctrl) => {
-      if (!this.dragging) return;
+      if (!this.dragging && !this.scrollDrag) return;
       ctrl.stopPropagation();
     }, 50));
 
     this.unsubs.push(bus.onPointerMove((e, ctrl) => {
-      if (!this.dragging) return;
+      if (this.blockDrag) {
+        ctrl.stopPropagation();
+        this.dragX = e.clientX;
+        this.dragY = e.clientY;
+        const ins = this.blockInsertIndex(this.docY(e.clientY));
+        if (ins !== this.blockDrag.insert) this.blockDrag.insert = ins;
+        // Past the dead zone the drag is real — a tiny jiggle stays a click.
+        if (ins !== this.blockDrag.src || Math.abs(e.clientY - this.blockDrag.downY) > 3) {
+          this.blockDrag.moved = true;
+        }
+        return;
+      }
+      if (this.scrollDrag) {
+        ctrl.stopPropagation();
+        this.scrollActiveT = this.time;
+        this.scrollbarJump(e.clientY);
+        return;
+      }
+      if (!this.dragging) {
+        // Gutter grip + menu hover tracking (block lookup is y-only so the
+        // left margin counts toward its block).
+        this.hoverBlock = this.blockAtY(e.clientX, e.clientY);
+        this.gripHot = this.gripRect !== null && inside(e.clientX, e.clientY, this.gripRect);
+        if (this.ctxMenu) this.ctxMenuHover(e.clientX, e.clientY);
+        // Slash menu hover highlight.
+        if (this.slash?.rect && inside(e.clientX, e.clientY, this.slash.rect)) {
+          const idx = Math.floor((e.clientY - this.slash.rect.y - 6) / 30);
+          if (idx >= 0 && idx < this.slash.items.length && idx !== this.slash.index) {
+            this.slash.index = idx;
+          }
+        }
+        return;
+      }
       ctrl.stopPropagation();
+      this.dragX = e.clientX;
+      this.dragY = e.clientY;
       if (this.anchor === null) this.anchor = { ...this.caret };
       this.caret = this.posAtSurface(e.clientX, e.clientY);
-      this.dirty = true;
     }, 50));
 
     this.unsubs.push(bus.onPointerUp((_e, ctrl) => {
-      if (!this.dragging) return;
-      ctrl.stopPropagation();
+      this.scrollDrag = false;
+      if (this.blockDrag) {
+        ctrl.stopPropagation();
+        const bd = this.blockDrag;
+        this.blockDrag = null;
+        if (bd.moved && bd.insert !== bd.src && bd.insert !== bd.src + 1) {
+          this.mutate("move");
+          const [blk] = this.doc.blocks.splice(bd.src, 1);
+          const ins = bd.insert > bd.src ? bd.insert - 1 : bd.insert;
+          this.doc.blocks.splice(ins, 0, blk!);
+          this.caret = { block: ins, offset: 0 };
+          this.anchor = null;
+          if (this.animationsOn) this.flashAnim = { block: blk!.id, t0: this.time };
+          this.inserted();
+        } else if (!bd.moved) {
+          // Plain click on the grip → block action menu (AppFlowy parity).
+          const g = this.gripRect;
+          this.openCtxMenu(g ? g.x + g.w + 4 : 0, g ? g.y + 4 : 0, { block: bd.src, offset: 0 }, "block");
+        }
+        return;
+      }
+      if (this.dragging) ctrl.stopPropagation();
       this.dragging = false;
-      // Show format toolbar over a non-empty selection.
+      // Show the format toolbar whenever a selection settles — after a drag
+      // or a double/triple-click word/block selection.
       if (this.anchor !== null && docCompare(this.anchor, this.caret) !== 0) {
         this.showToolbar();
       }
@@ -318,12 +540,18 @@ export class EditorSurface implements ScreenUiCompositor {
     this.unsubs.push(bus.onWheel((e, ctrl) => {
       if (!inRect(e.clientX, e.clientY)) return;
       ctrl.stopPropagation();
-      const max = Math.max(0, (this.layout?.height ?? 0) + PAD_TOP * 2 + TITLE_H - this.rect.h);
-      this.scrollTarget = clamp(this.scrollTarget + e.deltaY, 0, max);
+      this.scrollTarget = clamp(this.scrollTarget + e.deltaY, 0, this.maxScroll());
+      this.scrollActiveT = this.time;
       this.toolbar = null;
+      this.ctxMenu = null;
     }, 50));
 
     this.unsubs.push(bus.onKeyDown((e, ctrl) => {
+      if (this.blockDrag && e.key === "Escape") {
+        this.blockDrag = null;
+        ctrl.stopPropagation();
+        return;
+      }
       if (!this.focused || !this.active) return;
       if (this.handleKey(e)) ctrl.stopPropagation();
     }, 50));
@@ -348,16 +576,266 @@ export class EditorSurface implements ScreenUiCompositor {
     for (const line of this.layout.lines) {
       if (dy < line.y || dy >= line.y + line.height) continue;
       const b = this.doc.blocks[line.block];
-      if (b?.kind === "todo" && line.blockStart === 0) {
+      if (b?.kind === "todo" && line.blockFirst) {
         this.history.push(this.doc.blocks, this.caret, this.anchor, "toggle");
         b.checked = !b.checked;
-        this.dirty = true;
+        this.anchor = null;
+        if (this.animationsOn) this.todoAnim = { block: b.id, checked: b.checked, t0: this.time };
         this.onChange?.();
         return true;
       }
       return false;
     }
     return false;
+  }
+
+  /** Scroll range bottom — content height plus padding, minus viewport. */
+  private maxScroll(): number {
+    return Math.max(0, (this.layout?.height ?? 0) + PAD_TOP + TITLE_H + PAD_BOTTOM - this.rect.h);
+  }
+
+  /** Map a pointer y to a scroll position (scrollbar drag). */
+  private scrollbarJump(y: number): void {
+    const trackH = this.rect.h - 8;
+    const total = (this.layout?.height ?? 0) + PAD_TOP + TITLE_H + PAD_BOTTOM;
+    const thumbH = Math.max(28, trackH * (this.rect.h / Math.max(total, 1)));
+    const ratio = (y - this.rect.y - 4 - thumbH / 2) / Math.max(1, trackH - thumbH);
+    this.scrollTarget = clamp(ratio * this.maxScroll(), 0, this.maxScroll());
+  }
+
+  /** Double-click: select the word under the caret position. */
+  private selectWordAt(pos: DocPos): void {
+    const b = this.blockOf(pos);
+    if (!b) return;
+    const t = blockText(b);
+    const n = t.length;
+    // Select the contiguous run of the clicked char's class — word chars,
+    // whitespace, or punctuation — without crossing into neighbors.
+    const clsOf = (c: string) => (/\w/.test(c) ? 1 : /\s/.test(c) ? 0 : 2);
+    const at = n === 0 ? 0 : Math.min(clamp(pos.offset, 0, n), n - 1);
+    const cls = clsOf(t[at]!);
+    let lo = at, hi = at + 1;
+    for (; lo > 0 && clsOf(t[lo - 1]!) === cls; lo--) {}
+    for (; hi < n && clsOf(t[hi]!) === cls; hi++) {}
+    this.anchor = { block: pos.block, offset: lo };
+    this.caret = { block: pos.block, offset: hi };
+  }
+
+  /** Triple-click: select the whole block's text. */
+  private selectBlockAt(pos: DocPos): void {
+    const b = this.blockOf(pos);
+    if (!b) return;
+    this.anchor = { block: pos.block, offset: 0 };
+    this.caret = { block: pos.block, offset: blockText(b).length };
+  }
+
+  // ── Context menu + block drag ────────────────────────────────────────────
+
+  /** Normalized [lo, hi] selection, or null when collapsed/no selection. */
+  private selRange(): [DocPos, DocPos] | null {
+    if (this.anchor === null || docCompare(this.anchor, this.caret) === 0) return null;
+    return docCompare(this.anchor, this.caret) <= 0
+      ? [this.anchor, this.caret] : [this.caret, this.anchor];
+  }
+
+  /** Block index under a surface-space point (vertical only — the gutter
+   *  margin counts toward its block). -1 outside the doc column. */
+  private blockAtY(sx: number, sy: number): number {
+    if (!this.layout || !this.active) return -1;
+    if (sx < this.rect.x || sx > this.rect.x + this.rect.w ||
+      sy < this.rect.y || sy > this.rect.y + this.rect.h) return -1;
+    const dy = this.docY(sy);
+    if (dy < 0) return -1;
+    const lbs = this.layout.blocks;
+    for (let i = 0; i < lbs.length; i++) {
+      const lb = lbs[i]!;
+      if (dy < lb.y + lb.height) return lb.block;
+    }
+    return lbs.length ? lbs[lbs.length - 1]!.block : -1;
+  }
+
+  /** Insertion slot for a block drop at doc-space y — the index the dragged
+   *  block would occupy (0..blocks.length). */
+  private blockInsertIndex(dy: number): number {
+    const lbs = this.layout?.blocks ?? [];
+    for (let i = 0; i < lbs.length; i++) {
+      const lb = lbs[i]!;
+      if (dy < lb.y + lb.height / 2) return i;
+    }
+    return lbs.length;
+  }
+
+  /** Doc-space y of the boundary where an insert at `idx` would land —
+   *  the midpoint of the gap between the neighboring blocks. */
+  private insertLineY(idx: number): number {
+    const lbs = this.layout?.blocks ?? [];
+    if (lbs.length === 0) return 0;
+    if (idx <= 0) return lbs[0]!.y - 5;
+    if (idx >= lbs.length) return lbs[lbs.length - 1]!.y + lbs[lbs.length - 1]!.height + 5;
+    const prev = lbs[idx - 1]!;
+    return (prev.y + prev.height + lbs[idx]!.y) / 2;
+  }
+
+  private openCtxMenu(x: number, y: number, pos: DocPos, mode: "text" | "block"): void {
+    const hasSel = this.selRange() !== null;
+    const rows: MenuRow[] = mode === "text" ? [
+      { id: "cut", label: "Cut", hint: "Ctrl+X", disabled: !hasSel },
+      { id: "copy", label: "Copy", hint: "Ctrl+C", disabled: !hasSel },
+      { id: "paste", label: "Paste", hint: "Ctrl+V" },
+      { sep: true },
+      { id: "turn", label: "Turn into", hint: "›" },
+      { sep: true },
+      { id: "duplicate", label: "Duplicate" },
+      { id: "delete", label: "Delete" },
+    ] : [
+      { id: "turn", label: "Turn into", hint: "›" },
+      { sep: true },
+      { id: "insertBelow", label: "Insert below" },
+      { id: "duplicate", label: "Duplicate" },
+      { id: "moveUp", label: "Move up", hint: "Ctrl+⇧↑", disabled: pos.block === 0 },
+      { id: "moveDown", label: "Move down", hint: "Ctrl+⇧↓", disabled: pos.block >= this.doc.blocks.length - 1 },
+      { sep: true },
+      { id: "delete", label: "Delete" },
+    ];
+    // Initial highlight lands on the first actionable row.
+    let index = 0;
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i]!;
+      if (!("sep" in r) && !r.disabled) { index = i; break; }
+    }
+    this.ctxMenu = { rows, index, rect: null, subOpen: false, subIndex: 0, subRect: null, pos, x, y, t0: this.time };
+    this.slash = null;
+    this.toolbar = null;
+  }
+
+  private menuRowTop(m: CtxMenuState, i: number): number {
+    let y = (m.rect?.y ?? m.y) + MENU_PAD;
+    for (let k = 0; k < i; k++) y += "sep" in m.rows[k]! ? MENU_SEP_H : MENU_ROW_H;
+    return y;
+  }
+
+  private menuRowAt(m: CtxMenuState, py: number): number {
+    if (!m.rect) return -1;
+    let y = m.rect.y + MENU_PAD;
+    for (let i = 0; i < m.rows.length; i++) {
+      const h = "sep" in m.rows[i]! ? MENU_SEP_H : MENU_ROW_H;
+      if (py >= y && py < y + h) return i;
+      y += h;
+    }
+    return -1;
+  }
+
+  private ctxMenuHover(x: number, y: number): void {
+    const m = this.ctxMenu;
+    if (!m) return;
+    if (m.subOpen && m.subRect && inside(x, y, m.subRect)) {
+      const idx = Math.floor((y - m.subRect.y - MENU_PAD) / MENU_ROW_H);
+      if (idx >= 0 && idx < SLASH_ITEMS.length) m.subIndex = idx;
+      return;
+    }
+    if (m.rect && inside(x, y, m.rect)) {
+      const hit = this.menuRowAt(m, y);
+      if (hit < 0) return;
+      m.index = hit;
+      const row = m.rows[hit]!;
+      // Hovering the "Turn into" row opens its submenu; anything else closes it.
+      m.subOpen = !("sep" in row) && row.id === "turn";
+    }
+  }
+
+  private ctxAction(id: string): void {
+    const m = this.ctxMenu;
+    this.ctxMenu = null;
+    if (!m) return;
+    const target = clamp(m.pos.block, 0, Math.max(0, this.doc.blocks.length - 1));
+    switch (id) {
+      case "cut": this.copy(true); return;
+      case "copy": this.copy(false); return;
+      case "paste": this.paste(); return;
+      case "delete": {
+        if (this.selRange()) { this.deleteSelection(); return; }
+        this.mutate("delete");
+        if (this.doc.blocks.length <= 1) {
+          // Last block — clear it rather than leaving an empty document.
+          const b = this.doc.blocks[0];
+          if (b) { b.kind = "paragraph"; b.spans = []; delete b.lang; delete b.checked; delete b.num; }
+          this.caret = { block: 0, offset: 0 };
+        } else {
+          this.doc.blocks.splice(target, 1);
+          this.caret = { block: Math.min(target, this.doc.blocks.length - 1), offset: 0 };
+        }
+        this.anchor = null;
+        this.inserted();
+        return;
+      }
+      case "duplicate": {
+        const b = this.doc.blocks[target];
+        if (!b) return;
+        this.mutate("duplicate");
+        const clone: Block = {
+          id: newBlockId(), kind: b.kind,
+          spans: b.spans.map(s => ({ text: s.text, style: { ...s.style } })),
+          lang: b.lang, checked: b.checked, num: b.num,
+        };
+        this.doc.blocks.splice(target + 1, 0, clone);
+        this.caret = { block: target + 1, offset: this.caret.block === target ? this.caret.offset : 0 };
+        this.anchor = null;
+        this.inserted();
+        return;
+      }
+      case "insertBelow": {
+        this.mutate("insert");
+        this.doc.blocks.splice(target + 1, 0, { id: newBlockId(), kind: "paragraph", spans: [] });
+        this.caret = { block: target + 1, offset: 0 };
+        this.anchor = null;
+        this.inserted();
+        return;
+      }
+      case "moveUp": case "moveDown": {
+        this.caret = { block: target, offset: 0 };
+        this.anchor = null;
+        this.moveBlock(id === "moveUp" ? -1 : 1);
+        return;
+      }
+    }
+  }
+
+  /** Apply a block kind ("Turn into") — to the selection's span of blocks
+   *  when one exists, else the block the menu was invoked on. */
+  private applyTurnInto(kind: BlockKind): void {
+    const m = this.ctxMenu;
+    this.ctxMenu = null;
+    const sel = this.selRange();
+    const a = sel ? sel[0].block : clamp(m?.pos.block ?? 0, 0, Math.max(0, this.doc.blocks.length - 1));
+    const b = sel ? sel[1].block : a;
+    this.mutate("format");
+    for (let i = a; i <= b; i++) {
+      const blk = this.doc.blocks[i];
+      if (!blk) continue;
+      blk.kind = kind;
+      if (kind === "todo") blk.checked = false;
+      if (kind === "number") blk.num = 1;
+      if (kind === "codeblock" && !blk.lang) blk.lang = "ts";
+      if (kind === "divider") blk.spans = [];
+      if (this.animationsOn) this.flashAnim = { block: blk.id, t0: this.time };
+    }
+    this.anchor = null;
+    const cb = this.blockOf(this.caret);
+    if (cb) this.caret = { ...this.caret, offset: Math.min(this.caret.offset, blockText(cb).length) };
+    this.inserted();
+  }
+
+  /** Move the caret's block one slot (Ctrl+Shift+Arrow / menu). */
+  private moveBlock(dir: -1 | 1): void {
+    const i = this.caret.block;
+    const j = i + dir;
+    if (i < 0 || i >= this.doc.blocks.length || j < 0 || j >= this.doc.blocks.length) return;
+    this.mutate("move");
+    const [blk] = this.doc.blocks.splice(i, 1);
+    this.doc.blocks.splice(j, 0, blk!);
+    this.caret = { ...this.caret, block: j };
+    this.anchor = null;
+    this.inserted();
   }
 
   // ── Editing ─────────────────────────────────────────────────────────────
@@ -371,14 +849,28 @@ export class EditorSurface implements ScreenUiCompositor {
   }
 
   private inserted(): void {
+    this.renumberLists();
     this.dirty = true;
     this.blinkT = 0;
     this.onChange?.();
   }
 
+  /** Keep contiguous `number` runs sequential — items after an
+   *  insert/delete/split pick up their predecessor's number + 1. */
+  private renumberLists(): void {
+    let prev: Block | null = null;
+    this.doc.blocks.forEach(b => {
+      if (b.kind === "number") {
+        b.num = prev?.kind === "number" ? (prev.num ?? 0) + 1 : 1;
+      }
+      prev = b;
+    });
+  }
+
   private insertText(text: string): void {
     // Normalize CR-style line breaks (IME commits, winit textinput) and drop
     // other control chars that would rasterize as tofu.
+    // oxlint-disable-next-line no-control-regex — intentional: strips control chars
     const clean = text.replace(/\r\n?/g, "\n").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
     for (let ti = 0; ti < clean.length; ti++) {
       this.insertChar(clean[ti]!);
@@ -386,6 +878,16 @@ export class EditorSurface implements ScreenUiCompositor {
   }
 
   private insertChar(ch: string): void {
+    // Dividers can't hold text — spill into a fresh paragraph below.
+    const db = this.blockOf(this.caret);
+    if (db?.kind === "divider") {
+      this.mutate("type");
+      this.doc.blocks.splice(this.caret.block + 1, 0, { id: newBlockId(), kind: "paragraph", spans: [] });
+      this.caret = { block: this.caret.block + 1, offset: 0 };
+      if (ch === "\n") { this.inserted(); return; }
+      // Fall through — `ch` is processed in the new paragraph.
+    }
+
     // Slash menu stays open while its filter query grows.
     if (this.slash) {
       if (ch === "\n") { this.applySlash(this.slash.index); return; }
@@ -422,6 +924,7 @@ export class EditorSurface implements ScreenUiCompositor {
           b.kind = m.kind;
           m.apply?.(b);
           this.caret = { block: this.caret.block, offset: 0 };
+          if (this.animationsOn) this.flashAnim = { block: b.id, t0: this.time };
           this.inserted();
           return;
         }
@@ -439,8 +942,12 @@ export class EditorSurface implements ScreenUiCompositor {
     this.inserted();
   }
 
-  /** Raw single-char insert at caret (no markdown/slash handling). */
+  /** Raw text insert at caret (no markdown/slash handling). */
   private insertRaw(text: string, styled = true): void {
+    if (this.doc.blocks.length === 0) {
+      this.doc.blocks.push({ id: newBlockId(), kind: "paragraph", spans: [] });
+      this.caret = { block: 0, offset: 0 };
+    }
     if (this.anchor !== null) this.deleteSelection(false);
     const b = this.blockOf(this.caret);
     if (!b) return;
@@ -449,7 +956,7 @@ export class EditorSurface implements ScreenUiCompositor {
       if (ps) styleRange(b, start, start + text.length, ps);
     };
     if (b.spans.length === 0) {
-      b.spans.push({ text, style: { family: "inter", weight: 400, italic: false, sizePx: 16, color: this.theme.text } });
+      b.spans.push({ text, style: { family: "inter", weight: 400, italic: false, sizePx: 16 } });
       applyPending(0);
       this.caret = { block: this.caret.block, offset: text.length };
       return;
@@ -512,8 +1019,11 @@ export class EditorSurface implements ScreenUiCompositor {
     this.mutate("delete");
     if (this.caret.offset > 0) {
       const b = this.blockOf(this.caret);
-      spliceSpans(b!, this.caret.offset - 1, 1);
-      this.caret = { ...this.caret, offset: this.caret.offset - 1 };
+      const t = blockText(b!);
+      // Delete the whole codepoint — surrogate pairs go together.
+      const n = this.caret.offset >= 2 && isLowSurrogate(t.charCodeAt(this.caret.offset - 1)) && isHighSurrogate(t.charCodeAt(this.caret.offset - 2)) ? 2 : 1;
+      spliceSpans(b!, this.caret.offset - n, n);
+      this.caret = { ...this.caret, offset: this.caret.offset - n };
     } else if (this.caret.block > 0) {
       const prev = this.doc.blocks[this.caret.block - 1]!;
       const prevLen = blockText(prev).length;
@@ -526,7 +1036,11 @@ export class EditorSurface implements ScreenUiCompositor {
       this.caret = { block: this.caret.block - 1, offset: prevLen };
     } else {
       const b = this.blockOf(this.caret);
-      if (b && b.kind !== "paragraph") {
+      if (b?.kind === "divider") {
+        // Backspace on the first block being a divider deletes it outright —
+        // no previous block to merge into.
+        this.doc.blocks.splice(this.caret.block, 1);
+      } else if (b && b.kind !== "paragraph") {
         b.kind = "paragraph"; // backspace at start unstyles the block
       }
     }
@@ -568,7 +1082,6 @@ export class EditorSurface implements ScreenUiCompositor {
     this.caret = dir < 0 ? this.wordBack(this.caret) : this.wordForward(this.caret);
     this.goalX = null;
     this.blinkT = 0;
-    this.dirty = true;
   }
 
   private backspaceWord(): void {
@@ -596,7 +1109,9 @@ export class EditorSurface implements ScreenUiCompositor {
     const b = this.blockOf(this.caret);
     const len = b ? blockText(b).length : 0;
     if (this.caret.offset < len) {
-      spliceSpans(b!, this.caret.offset, 1);
+      const t = blockText(b!);
+      const n = this.caret.offset + 1 < len && isHighSurrogate(t.charCodeAt(this.caret.offset)) && isLowSurrogate(t.charCodeAt(this.caret.offset + 1)) ? 2 : 1;
+      spliceSpans(b!, this.caret.offset, n);
     } else if (this.caret.block + 1 < this.doc.blocks.length) {
       const next = this.doc.blocks.splice(this.caret.block + 1, 1)[0]!;
       b!.spans.push(...next.spans);
@@ -605,40 +1120,59 @@ export class EditorSurface implements ScreenUiCompositor {
   }
 
   private splitBlock(): void {
-    if (this.anchor !== null) this.deleteSelection(false);
+    // Snapshot BEFORE deleting the selection — otherwise undo restores the
+    // post-delete state and the selected text is unrecoverable.
     this.mutate("split");
+    if (this.anchor !== null) this.deleteSelection(false);
     const b = this.blockOf(this.caret);
     if (!b) return;
-    const tail = takeSpansFrom(b, this.caret.offset);
-    let kind = b.kind;
-    if (kind === "h1" || kind === "h2" || kind === "h3" || kind === "quote" || kind === "callout" || kind === "divider") {
-      kind = "paragraph";
-    }
-    // In codeblocks, Enter inserts a newline INSIDE the block.
+    // In codeblocks, Enter inserts a newline INSIDE the block — unless the
+    // caret sits on a trailing empty line, where Enter exits the block into
+    // a fresh paragraph (double-Enter-to-exit, Notion-style).
     if (b.kind === "codeblock") {
-      this.insertRaw("\n");
+      const text = blockText(b);
+      if (this.caret.offset === text.length && text.endsWith("\n")) {
+        spliceSpans(b, text.length - 1, 1);
+        this.doc.blocks.splice(this.caret.block + 1, 0, { id: newBlockId(), kind: "paragraph", spans: [] });
+        this.caret = { block: this.caret.block + 1, offset: 0 };
+      } else {
+        this.insertRaw("\n");
+      }
       this.inserted();
       return;
+    }
+    // Enter on a divider inserts a paragraph below — the rule survives.
+    if (b.kind === "divider") {
+      this.doc.blocks.splice(this.caret.block + 1, 0, { id: newBlockId(), kind: "paragraph", spans: [] });
+      this.caret = { block: this.caret.block + 1, offset: 0 };
+      this.inserted();
+      return;
+    }
+    // Enter on an empty non-paragraph block converts it to a paragraph
+    // (exits lists/headings/quotes — Notion behavior).
+    if (blockText(b).length === 0 && b.kind !== "paragraph") {
+      b.kind = "paragraph";
+      this.caret = { block: this.caret.block, offset: 0 };
+      this.inserted();
+      return;
+    }
+    const tail = takeSpansFrom(b, this.caret.offset);
+    let kind = b.kind;
+    if (kind === "h1" || kind === "h2" || kind === "h3" || kind === "quote" || kind === "callout") {
+      kind = "paragraph";
     }
     const nb: Block = { id: newBlockId(), kind, spans: tail };
     if (kind === "todo") nb.checked = false;
     if (kind === "number") nb.num = (b.num ?? 1) + 1;
     this.doc.blocks.splice(this.caret.block + 1, 0, nb);
-    if (blockText(b).length === 0 && b.kind !== "paragraph" && kind === "paragraph") {
-      // Enter on an empty styled block → turn it into a paragraph instead.
-      this.doc.blocks.splice(this.caret.block + 1, 1);
-      b.kind = "paragraph";
-      this.caret = { block: this.caret.block, offset: 0 };
-    } else {
-      this.caret = { block: this.caret.block + 1, offset: 0 };
-    }
+    this.caret = { block: this.caret.block + 1, offset: 0 };
     this.inserted();
   }
 
   // ── Slash menu ────────────────────────────────────────────────────────────
 
   private openSlash(block: number, slashOffset: number): void {
-    this.slash = { block, slashOffset, index: 0, items: SLASH_ITEMS, rect: null };
+    this.slash = { block, slashOffset, index: 0, items: SLASH_ITEMS, rect: null, t0: this.time };
   }
 
   private updateSlashQuery(): void {
@@ -653,7 +1187,6 @@ export class EditorSurface implements ScreenUiCompositor {
     if (items.length === 0) { this.slash = null; return; }
     this.slash.items = items;
     this.slash.index = clamp(this.slash.index, 0, items.length - 1);
-    this.dirty = true;
   }
 
   private applySlash(idx: number): void {
@@ -669,6 +1202,7 @@ export class EditorSurface implements ScreenUiCompositor {
     if (item.kind === "number") b.num = 1;
     if (item.kind === "codeblock") b.lang = "ts";
     this.caret = { block: this.caret.block, offset: 0 };
+    if (this.animationsOn) this.flashAnim = { block: b.id, t0: this.time };
     this.inserted();
   }
 
@@ -684,7 +1218,12 @@ export class EditorSurface implements ScreenUiCompositor {
     const w = TOOLBAR_BTNS.reduce((n, b) => n + b.w, 0) + 12;
     const x = clamp(this.rect.x + PAD_X + top.x, this.rect.x + 4, this.rect.x + this.rect.w - w - 4);
     const y = Math.max(this.rect.y + 4, this.rect.y + PAD_TOP + TITLE_H - this.scrollY + top.y - 38);
-    this.toolbar = { rect: { x, y, w, h: 32 } };
+    const prev = this.toolbar;
+    this.toolbar = {
+      rect: { x, y, w, h: 32 },
+      t0: prev?.t0 ?? this.time,
+      forA: { ...a }, forB: { ...b },
+    };
   }
 
   private toolbarClick(mx: number): void {
@@ -706,29 +1245,73 @@ export class EditorSurface implements ScreenUiCompositor {
   private pendingStyle(): Partial<TextStyle> | null {
     if (!this.pending) return null;
     const st: Partial<TextStyle> = {};
-    if (this.pending.bold) st.weight = 700;
-    if (this.pending.italic) st.italic = true;
-    if (this.pending.underline) st.underline = true;
-    if (this.pending.strike) st.strikethrough = true;
-    if (this.pending.code) st.code = true;
+    Object.keys(this.pending).forEach((id) => {
+      const f = FORMAT[id];
+      if (f) Object.assign(st, this.pending![id] ? f.on : f.off);
+    });
     return Object.keys(st).length ? st : null;
   }
 
+  /** The style freshly typed text would inherit at `offset` — mirrors the
+   *  span pick in insertRaw (first span whose end reaches the caret). */
+  private typingStyle(b: Block, offset: number): TextStyle | null {
+    let off = 0;
+    for (let i = 0; i < b.spans.length; i++) {
+      const sp = b.spans[i]!;
+      if (offset <= off + sp.text.length || i === b.spans.length - 1) return sp.style;
+      off += sp.text.length;
+    }
+    return null;
+  }
+
   private applyFormat(id: string): void {
-    if (this.anchor === null) {
-      // No selection — toggle the pending typing style.
-      const p = { ...(this.pending ?? {}), [id]: !(this.pending?.[id]) };
-      this.pending = Object.values(p).some(Boolean) ? p : null;
+    const f = FORMAT[id];
+    if (!f) return;
+    const collapsed = this.anchor === null ||
+      (this.anchor.block === this.caret.block && this.anchor.offset === this.caret.offset);
+    if (collapsed) {
+      // No selection — arm/disarm the typing style. The toggle is relative to
+      // what the caret would inherit, so Ctrl+B inside a bold span means
+      // "type plain from here" rather than re-arming bold forever.
+      const b = this.blockOf(this.caret);
+      const st = b ? this.typingStyle(b, this.caret.offset) : null;
+      const inherited = st ? f.has(st) : false;
+      const next = !(this.pending?.[id] ?? inherited);
+      const p = { ...this.pending };
+      if (next === inherited) delete p[id]; else p[id] = next;
+      this.pending = Object.keys(p).length ? p : null;
+      this.anchor = null;
       this.blinkT = 0;
-      this.dirty = true;
       return;
     }
+    this.mutate("format");
+    const a = docCompare(this.anchor, this.caret) <= 0 ? this.anchor : this.caret;
+    const b = docCompare(this.anchor, this.caret) <= 0 ? this.caret : this.anchor;
+    // One decision for the whole selection — per-block toggling produced
+    // inside-out results when blocks disagreed (one bold, one plain).
+    let all = true, seen = false;
+    for (let bi = a.block; bi <= b.block; bi++) {
+      const blk = this.doc.blocks[bi]!;
+      const s = bi === a.block ? a.offset : 0;
+      const e = bi === b.block ? b.offset : blockText(blk).length;
+      if (e > s) { seen = true; if (!rangeHasStyle(blk, s, e, id)) all = false; }
+    }
+    const patch = seen && all ? f.off : f.on;
+    for (let bi = a.block; bi <= b.block; bi++) {
+      const blk = this.doc.blocks[bi]!;
+      const s = bi === a.block ? a.offset : 0;
+      const e = bi === b.block ? b.offset : blockText(blk).length;
+      if (e > s) styleRange(blk, s, e, patch);
+    }
+    this.inserted();
+  }
+
+  /** Ctrl+\ — strip every inline mark from the selection (Notion). With a
+   *  collapsed caret it just disarms pending typing styles. */
+  private clearFormat(): void {
+    if (this.anchor === null) { this.pending = null; return; }
     const patch: Partial<TextStyle> =
-      id === "bold" ? { weight: 700 } :
-      id === "italic" ? { italic: true } :
-      id === "underline" ? { underline: true } :
-      id === "strike" ? { strikethrough: true } :
-      { code: true };
+      { weight: 400, italic: false, underline: false, strikethrough: false, code: false };
     this.mutate("format");
     const a = docCompare(this.anchor, this.caret) <= 0 ? this.anchor : this.caret;
     const b = docCompare(this.anchor, this.caret) <= 0 ? this.caret : this.anchor;
@@ -736,15 +1319,16 @@ export class EditorSurface implements ScreenUiCompositor {
       const blk = this.doc.blocks[bi]!;
       const s = bi === a.block ? a.offset : 0;
       const e = bi === b.block ? b.offset : blockText(blk).length;
-      // Toggle: if fully styled already, strip instead.
-      const already = rangeHasStyle(blk, s, e, id);
-      const realPatch = already ? inversePatch(id) : patch;
-      styleRange(blk, s, e, realPatch);
+      if (e > s) styleRange(blk, s, e, patch);
     }
     this.inserted();
   }
 
   // ── Clipboard ─────────────────────────────────────────────────────────────
+
+  /** Internal structured copy — lets paste restore block kinds + spans when
+   *  the OS clipboard still holds the text we exported. */
+  private internalClip: { text: string; blocks: Block[] } | null = null;
 
   private clipboardText(): string {
     if (this.anchor === null) return "";
@@ -763,6 +1347,30 @@ export class EditorSurface implements ScreenUiCompositor {
     return parts.join("\n");
   }
 
+  /** Deep-copy of the selected block range — first/last blocks sliced at the
+   *  anchor/caret offsets, middle blocks whole. */
+  private sliceSelection(): Block[] {
+    const a = docCompare(this.anchor!, this.caret) <= 0 ? this.anchor! : this.caret;
+    const b = docCompare(this.anchor!, this.caret) <= 0 ? this.caret : this.anchor!;
+    const out: Block[] = [];
+    for (let bi = a.block; bi <= b.block; bi++) {
+      const src = this.doc.blocks[bi]!;
+      const s = bi === a.block ? a.offset : 0;
+      const e = bi === b.block ? b.offset : blockText(src).length;
+      const tmp = { spans: src.spans.map(sp => ({ text: sp.text, style: { ...sp.style } })) };
+      spliceSpans(tmp, e, Infinity);
+      spliceSpans(tmp, 0, s);
+      out.push({ id: newBlockId(), kind: src.kind, spans: tmp.spans, lang: src.lang, checked: src.checked, num: src.num });
+    }
+    return out;
+  }
+
+  /** Splice styled spans into a block at a text offset. */
+  private insertSpansAt(b: Block, off: number, spans: Span[]): void {
+    const tail = takeSpansFrom(b, off);
+    b.spans.push(...spans, ...tail);
+  }
+
   private clipboardSet(text: string): void {
     const nw = (globalThis as { __nativeWindow?: { setClipboardText?: (t: string) => void } }).__nativeWindow;
     try { nw?.setClipboardText?.(text); } catch (e) { log.warn("editor", `clipboard set failed: ${e}`); }
@@ -775,15 +1383,45 @@ export class EditorSurface implements ScreenUiCompositor {
 
   private copy(cut: boolean): void {
     if (this.anchor === null) return;
-    this.clipboardSet(this.clipboardText());
+    const text = this.clipboardText();
+    this.clipboardSet(text);
+    this.internalClip = { text, blocks: this.sliceSelection() };
     if (cut) this.deleteSelection();
   }
 
-  private paste(): void {
+  private paste(plain = false): void {
     const text = this.clipboardGet().replace(/\r\n?/g, "\n");
     if (!text) return;
+    this.pending = null;
     this.mutate("paste");
     if (this.anchor !== null) this.deleteSelection(false);
+    const cur = this.blockOf(this.caret);
+
+    // In a codeblock, pasted newlines stay inside the block.
+    if (cur?.kind === "codeblock") {
+      this.insertRaw(text, false);
+      this.inserted();
+      return;
+    }
+
+    if (!plain) {
+      // Internal clipboard: the OS text still matches what we copied → restore
+      // the full structure (block kinds + inline styles) instead of plaintext.
+      const clip = this.internalClip;
+      if (clip && clip.blocks.length > 0 && clip.text === text) {
+        this.pasteStructured(clip.blocks);
+        return;
+      }
+
+      // Markdown-looking paste (first line carries a block marker) → typed
+      // blocks. Otherwise plain paragraph paste.
+      const md = parseMarkdownLines(text);
+      if (md) {
+        this.pasteBlocks(md);
+        return;
+      }
+    }
+
     const lines = text.split("\n");
     if (lines.length === 1) {
       this.insertRaw(lines[0]!, false);
@@ -793,7 +1431,7 @@ export class EditorSurface implements ScreenUiCompositor {
       const b = this.blockOf(this.caret)!;
       const tail = takeSpansFrom(b, this.caret.offset);
       const baseStyle = b.spans[0]?.style ?? tail[0]?.style ?? {
-        family: "inter" as const, weight: 400, italic: false, sizePx: 16, color: this.theme.text,
+        family: "inter" as const, weight: 400, italic: false, sizePx: 16,
       };
       const newBlocks: Block[] = lines.slice(1).map((l) => ({
         id: newBlockId(),
@@ -809,6 +1447,107 @@ export class EditorSurface implements ScreenUiCompositor {
     this.inserted();
   }
 
+  /** Paste structured blocks from the internal clipboard: first block merges
+   *  into the caret block (adopting its kind if the caret block is empty),
+   *  the rest splice in below with kinds/spans intact; the caret's old tail
+   *  follows the last pasted block. */
+  private pasteStructured(blocks: Block[]): void {
+    const b = this.blockOf(this.caret);
+    if (!b) return;
+    const cloneSpans = (ss: Span[]): Span[] => ss.map(s => ({ text: s.text, style: { ...s.style } }));
+    const first = blocks[0]!;
+    const firstLen = blockText(first).length;
+    if (first.kind !== "paragraph" && blockText(b).length === 0) {
+      b.kind = first.kind;
+      b.checked = first.checked;
+      b.num = first.num;
+      b.lang = first.lang;
+      b.spans = cloneSpans(first.spans);
+      this.caret = { block: this.caret.block, offset: firstLen };
+    } else {
+      this.insertSpansAt(b, this.caret.offset, cloneSpans(first.spans));
+      this.caret = { block: this.caret.block, offset: this.caret.offset + firstLen };
+    }
+
+    if (blocks.length > 1) {
+      const tail = takeSpansFrom(b, this.caret.offset);
+      const mid: Block[] = blocks.slice(1).map(src => ({
+        id: newBlockId(), kind: src.kind, spans: cloneSpans(src.spans),
+        lang: src.lang, checked: src.checked, num: src.num,
+      }));
+      const last = mid[mid.length - 1]!;
+      const endOff = blockText(last).length;
+      last.spans.push(...tail);
+      this.doc.blocks.splice(this.caret.block + 1, 0, ...mid);
+      this.caret = { block: this.caret.block + mid.length, offset: endOff };
+    }
+    this.inserted();
+  }
+
+  /** Paste pre-parsed block items: the first item merges into the current
+   *  block (adopting its kind when the current block is an empty paragraph);
+   *  the rest are spliced in below, with the caret's tail on the last one. */
+  private pasteBlocks(items: ParsedBlock[]): void {
+    const b = this.blockOf(this.caret);
+    if (!b) return;
+    const tail = takeSpansFrom(b, this.caret.offset);
+    const baseStyle: TextStyle = b.spans[0]?.style ?? tail[0]?.style ?? {
+      family: "inter", weight: 400, italic: false, sizePx: 16,
+    };
+    const spanOf = (text: string): Span[] =>
+      text ? [{ text, style: { ...baseStyle, code: undefined, underline: undefined, strikethrough: undefined } }] : [];
+
+    const first = items[0]!;
+    if (first.kind !== "paragraph" && blockText(b).length === 0) {
+      // Current block is empty — it becomes the pasted block's kind.
+      b.kind = first.kind;
+      b.checked = first.checked;
+      b.num = first.num;
+      b.lang = first.lang;
+      b.spans = spanOf(first.text);
+      this.caret = { block: this.caret.block, offset: first.text.length };
+    } else {
+      // Merge its text into the current block at the caret.
+      const ins: Span[] = spanOf(first.text);
+      let off = 0;
+      let done = false;
+      for (let i = 0; i < b.spans.length && !done; i++) {
+        const sp = b.spans[i]!;
+        if (this.caret.offset <= off + sp.text.length || i === b.spans.length - 1) {
+          const inner = clamp(this.caret.offset - off, 0, sp.text.length);
+          const head = { text: sp.text.slice(0, inner), style: sp.style };
+          const rest = { text: sp.text.slice(inner), style: sp.style };
+          b.spans.splice(i, 1, ...(head.text ? [head] : []), ...ins, ...(rest.text ? [rest] : []));
+          done = true;
+        }
+        off += sp.text.length;
+      }
+      if (!done) b.spans.push(...ins);
+      this.caret = { block: this.caret.block, offset: this.caret.offset + first.text.length };
+    }
+
+    if (items.length > 1) {
+      const newBlocks: Block[] = items.slice(1).map((it) => ({
+        id: newBlockId(),
+        kind: it.kind,
+        checked: it.checked,
+        num: it.num,
+        lang: it.lang,
+        spans: spanOf(it.text),
+      }));
+      const last = newBlocks[newBlocks.length - 1]!;
+      last.spans.push(...tail);
+      this.doc.blocks.splice(this.caret.block + 1, 0, ...newBlocks);
+      this.caret = {
+        block: this.caret.block + newBlocks.length,
+        offset: items[items.length - 1]!.text.length,
+      };
+    } else {
+      b.spans.push(...tail);
+    }
+    this.inserted();
+  }
+
   // ── Undo/redo ─────────────────────────────────────────────────────────────
 
   private undo(): void {
@@ -819,6 +1558,7 @@ export class EditorSurface implements ScreenUiCompositor {
     this.anchor = s.anchor;
     this.slash = null;
     this.toolbar = null;
+    this.pending = null;
     this.inserted();
   }
 
@@ -828,6 +1568,7 @@ export class EditorSurface implements ScreenUiCompositor {
     this.doc.blocks = s.blocks;
     this.caret = s.caret;
     this.anchor = s.anchor;
+    this.pending = null;
     this.inserted();
   }
 
@@ -835,10 +1576,39 @@ export class EditorSurface implements ScreenUiCompositor {
 
   private handleKey(e: KeyboardEvent): boolean {
     const k = e.key;
+    if (this.ctxMenu) {
+      const m = this.ctxMenu;
+      if (k === "Escape") { this.ctxMenu = null; return true; }
+      if (m.subOpen) {
+        if (k === "ArrowDown") { m.subIndex = (m.subIndex + 1) % SLASH_ITEMS.length; return true; }
+        if (k === "ArrowUp") { m.subIndex = (m.subIndex - 1 + SLASH_ITEMS.length) % SLASH_ITEMS.length; return true; }
+        if (k === "ArrowLeft") { m.subOpen = false; return true; }
+        if (k === "Enter" || k === "Tab") { this.applyTurnInto(SLASH_ITEMS[m.subIndex]!.kind); return true; }
+        return true;
+      }
+      if (k === "ArrowDown" || k === "ArrowUp") {
+        const dir = k === "ArrowDown" ? 1 : -1;
+        for (let n = 1; n <= m.rows.length; n++) {
+          const i = (m.index + dir * n + m.rows.length) % m.rows.length;
+          const r = m.rows[i]!;
+          if (!("sep" in r) && !r.disabled) { m.index = i; break; }
+        }
+        return true;
+      }
+      if (k === "ArrowRight" || k === "Enter" || k === "Tab") {
+        const row = m.rows[m.index];
+        if (row && !("sep" in row) && !row.disabled) {
+          if (row.id === "turn") { m.subOpen = true; m.subIndex = 0; }
+          else if (k !== "ArrowRight") this.ctxAction(row.id);
+        }
+        return true;
+      }
+      return true; // swallow everything else while the menu is up
+    }
     if (this.slash) {
-      if (k === "Escape") { this.slash = null; this.dirty = true; return true; }
-      if (k === "ArrowDown") { this.slash.index = (this.slash.index + 1) % this.slash.items.length; this.dirty = true; return true; }
-      if (k === "ArrowUp") { this.slash.index = (this.slash.index - 1 + this.slash.items.length) % this.slash.items.length; this.dirty = true; return true; }
+      if (k === "Escape") { this.slash = null; return true; }
+      if (k === "ArrowDown") { this.slash.index = (this.slash.index + 1) % this.slash.items.length; return true; }
+      if (k === "ArrowUp") { this.slash.index = (this.slash.index - 1 + this.slash.items.length) % this.slash.items.length; return true; }
       if (k === "Enter" || k === "Tab") { this.applySlash(this.slash.index); return true; }
       if (k === "Backspace") {
         const b = this.blockOf({ block: this.slash.block, offset: 0 });
@@ -846,6 +1616,11 @@ export class EditorSurface implements ScreenUiCompositor {
         this.backspace();
         this.updateSlashQuery();
         return true;
+      }
+      // Caret navigation dismisses the menu — the query would go stale.
+      if (k === "ArrowLeft" || k === "ArrowRight" || k === "Home" || k === "End" ||
+        k === "PageUp" || k === "PageDown") {
+        this.slash = null;
       }
       // Fall through to typing.
     }
@@ -855,11 +1630,17 @@ export class EditorSurface implements ScreenUiCompositor {
       if (k === "Delete") { this.deleteWordForward(); return true; }
       if (k === "ArrowLeft") { this.moveWord(-1, e.shiftKey); return true; }
       if (k === "ArrowRight") { this.moveWord(1, e.shiftKey); return true; }
+      if (k === "Home") { this.moveDocBoundary(-1, e.shiftKey); return true; }
+      if (k === "End") { this.moveDocBoundary(1, e.shiftKey); return true; }
+      if (k === "Enter") { this.toggleTodoAtCaret(); return true; }
+      // Block reorder — Notion/AppFlowy parity.
+      if (e.shiftKey && k === "ArrowUp") { this.moveBlock(-1); return true; }
+      if (e.shiftKey && k === "ArrowDown") { this.moveBlock(1); return true; }
       switch ((k ?? "").toLowerCase()) {
         case "a": this.selectAll(); return true;
         case "c": this.copy(false); return true;
-        case "x": this.copy(true); return true;
-        case "v": this.paste(); return true;
+        case "x": if (e.shiftKey) { this.applyFormat("strike"); return true; } this.copy(true); return true;
+        case "v": this.paste(e.shiftKey); return true;
         case "z": if (e.shiftKey) this.redo(); else this.undo(); return true;
         case "y": this.redo(); return true;
         case "b": this.applyFormat("bold"); return true;
@@ -867,20 +1648,30 @@ export class EditorSurface implements ScreenUiCompositor {
         case "u": this.applyFormat("underline"); return true;
         case "e": this.applyFormat("code"); return true;
         case "s": if (e.shiftKey) { this.applyFormat("strike"); return true; } return false;
+        case "\\": this.clearFormat(); return true;
         default: return false;
       }
     }
     switch (k) {
       case "Backspace": this.backspace(); return true;
       case "Delete": this.forwardDelete(); return true;
-      case "Enter": this.splitBlock(); return true;
-      case "Escape": this.slash = null; this.toolbar = null; this.anchor = null; this.pending = null; this.dirty = true; return true;
-      case "ArrowLeft": this.moveCaret(-1, e.shiftKey); return true;
-      case "ArrowRight": this.moveCaret(1, e.shiftKey); return true;
+      case "Enter":
+        if (e.shiftKey) { this.mutate("type"); this.insertRaw("\n"); this.inserted(); }
+        else this.splitBlock();
+        return true;
+      case "Escape": this.slash = null; this.toolbar = null; this.anchor = null; this.pending = null; return true;
+      case "ArrowLeft":
+        if (e.altKey) this.moveWord(-1, e.shiftKey); else this.moveCaret(-1, e.shiftKey);
+        return true;
+      case "ArrowRight":
+        if (e.altKey) this.moveWord(1, e.shiftKey); else this.moveCaret(1, e.shiftKey);
+        return true;
       case "ArrowUp": this.moveLine(-1, e.shiftKey); return true;
       case "ArrowDown": this.moveLine(1, e.shiftKey); return true;
       case "Home": this.moveHome(e.shiftKey); return true;
       case "End": this.moveEnd(e.shiftKey); return true;
+      case "PageUp": this.pageMove(-1, e.shiftKey); return true;
+      case "PageDown": this.pageMove(1, e.shiftKey); return true;
       case "Tab": this.mutate("type"); this.insertRaw("  "); this.inserted(); return true;
       default:
         // With native text input active, printable chars (including space)
@@ -895,15 +1686,19 @@ export class EditorSurface implements ScreenUiCompositor {
 
   private selectAll(): void {
     if (this.doc.blocks.length === 0) return;
+    this.pending = null;
     this.anchor = { block: 0, offset: 0 };
     const last = this.doc.blocks.length - 1;
     this.caret = { block: last, offset: blockText(this.doc.blocks[last]!).length };
-    this.dirty = true;
+    this.showToolbar();
   }
 
   private extendSelection(extend: boolean): void {
+    // Any caret move drops armed typing styles (Notion parity).
+    this.pending = null;
     if (extend) {
       if (this.anchor === null) this.anchor = { ...this.caret };
+      this.showToolbar();
     } else {
       this.anchor = null;
       this.toolbar = null;
@@ -923,10 +1718,15 @@ export class EditorSurface implements ScreenUiCompositor {
       block++;
       offset = 0;
     }
+    // Never park inside a surrogate pair — step over the whole codepoint.
+    const nb = this.doc.blocks[block];
+    const t = nb ? blockText(nb) : "";
+    if (offset > 0 && offset < t.length && isLowSurrogate(t.charCodeAt(offset)) && isHighSurrogate(t.charCodeAt(offset - 1))) {
+      offset += dir;
+    }
     this.caret = { block, offset: Math.max(0, offset) };
     this.goalX = null;
     this.blinkT = 0;
-    this.dirty = true;
   }
 
   private moveLine(dir: -1 | 1, shift: boolean): void {
@@ -940,7 +1740,6 @@ export class EditorSurface implements ScreenUiCompositor {
     this.caret = { block: target.block, offset: this.layouter.offsetNearX(target, gx) };
     this.goalX = gx;
     this.blinkT = 0;
-    this.dirty = true;
   }
 
   private moveHome(shift: boolean): void {
@@ -950,7 +1749,6 @@ export class EditorSurface implements ScreenUiCompositor {
     const line = this.layout.lines[Math.max(0, li)]!;
     this.caret = { block: line.block, offset: line.blockStart };
     this.blinkT = 0;
-    this.dirty = true;
   }
 
   private moveEnd(shift: boolean): void {
@@ -960,7 +1758,42 @@ export class EditorSurface implements ScreenUiCompositor {
     const line = this.layout.lines[Math.max(0, li)]!;
     this.caret = { block: line.block, offset: line.blockEnd };
     this.blinkT = 0;
-    this.dirty = true;
+  }
+
+  /** Ctrl+Home / Ctrl+End — jump to the document boundary. */
+  private moveDocBoundary(dir: -1 | 1, shift: boolean): void {
+    this.extendSelection(shift);
+    if (dir < 0) {
+      this.caret = { block: 0, offset: 0 };
+    } else {
+      const last = this.doc.blocks.length - 1;
+      this.caret = { block: Math.max(0, last), offset: last >= 0 ? blockText(this.doc.blocks[last]!).length : 0 };
+    }
+    this.goalX = null;
+    this.blinkT = 0;
+  }
+
+  /** PageUp/PageDown — move the caret ~one viewport height, keeping goal-x. */
+  private pageMove(dir: -1 | 1, shift: boolean): void {
+    if (!this.layout) return;
+    this.extendSelection(shift);
+    const cr = this.layouter.caretRect(this.layout, this.caret);
+    const gx = this.goalX ?? cr.x;
+    const pageH = Math.max(80, this.rect.h - PAD_TOP - TITLE_H - 24);
+    const dy = cr.y + dir * pageH;
+    this.caret = this.layouter.posAt(this.layout, gx, dy);
+    this.goalX = gx;
+    this.blinkT = 0;
+  }
+
+  /** Ctrl+Enter — toggle the todo checkbox under the caret. */
+  private toggleTodoAtCaret(): void {
+    const b = this.blockOf(this.caret);
+    if (b?.kind !== "todo") return;
+    this.mutate("toggle");
+    b.checked = !b.checked;
+    if (this.animationsOn) this.todoAnim = { block: b.id, checked: b.checked!, t0: this.time };
+    this.inserted();
   }
 
   // ── Frame ────────────────────────────────────────────────────────────────
@@ -969,7 +1802,39 @@ export class EditorSurface implements ScreenUiCompositor {
     this.time += dt;
     this.scrollY += (this.scrollTarget - this.scrollY) * Math.min(1, dt * SCROLL_LERP);
     if (Math.abs(this.scrollTarget - this.scrollY) < 0.1) this.scrollY = this.scrollTarget;
+    if (Math.abs(this.scrollTarget - this.scrollY) > 0.5) this.scrollActiveT = this.time;
     this.blinkT += dt;
+
+    if (this.flashAnim && this.time - this.flashAnim.t0 > FLASH_DUR) this.flashAnim = null;
+    if (this.todoAnim && this.time - this.todoAnim.t0 > CHECK_DUR) this.todoAnim = null;
+
+    // Drag auto-scroll near the top/bottom viewport edges (text-select and
+    // block-drag alike — block drags re-derive the insertion slot instead).
+    if (this.dragging || this.blockDrag) {
+      const top = this.rect.y + PAD_TOP + TITLE_H;
+      const bot = this.rect.y + this.rect.h - 8;
+      let v = 0;
+      if (this.dragY < top) v = -Math.min(1, (top - this.dragY) / 60) * 700;
+      else if (this.dragY > bot) v = Math.min(1, (this.dragY - bot) / 60 + 0.15) * 700;
+      if (v !== 0) {
+        this.scrollTarget = clamp(this.scrollTarget + v * dt, 0, this.maxScroll());
+        this.scrollActiveT = this.time;
+        if (this.blockDrag) {
+          this.blockDrag.insert = this.blockInsertIndex(this.docY(this.dragY));
+          this.blockDrag.moved = true;
+        } else {
+          if (this.anchor === null) this.anchor = { ...this.caret };
+          this.caret = this.posAtSurface(this.dragX, this.dragY);
+        }
+      }
+    }
+
+    // Relayout BEFORE caret math — caretRect on a stale layout returns {0,0}
+    // for positions in newly-created blocks, which snaps the scroll to top.
+    if (this.dirty && this.rect.w > 0 && this.cache.ready) {
+      this.layout = this.layouter.layout(this.doc, Math.max(80, this.rect.w - PAD_X * 2), this.theme);
+      this.dirty = false;
+    }
 
     if (this.layout) {
       const r = this.layouter.caretRect(this.layout, this.caret);
@@ -988,11 +1853,8 @@ export class EditorSurface implements ScreenUiCompositor {
         const vis = this.rect.h - PAD_TOP;
         if (cy - this.scrollY > vis) this.scrollTarget = cy - vis + 8;
         if (cy - this.scrollY < PAD_TOP + TITLE_H) this.scrollTarget = Math.max(0, cy - PAD_TOP - TITLE_H - 8);
+        this.scrollTarget = clamp(this.scrollTarget, 0, this.maxScroll());
       }
-    }
-    if (this.dirty && this.rect.w > 0 && this.cache.ready) {
-      this.layout = this.layouter.layout(this.doc, Math.max(80, this.rect.w - PAD_X * 2), this.theme);
-      this.dirty = false;
     }
   }
 
@@ -1033,9 +1895,24 @@ export class EditorSurface implements ScreenUiCompositor {
       if (block.kind === "codeblock") {
         p.roundedRect(this.rect.x + 8, by - 4, this.rect.w - 16, lb.height + 8, 8, t.codeBg);
       } else if (block.kind === "callout") {
-        p.roundedRect(this.rect.x + 8, by - 4, this.rect.w - 16, lb.height + 8, 8, [0.16, 0.19, 0.28, 1]);
+        p.roundedRect(this.rect.x + 8, by - 4, this.rect.w - 16, lb.height + 8, 8, t.calloutBg);
       } else if (block.kind === "quote") {
         p.roundedRect(ox - 20, by + 4, 3, lb.height - 8, 1.5, t.quoteBar);
+      }
+      // Block drag — tint the source block so it reads as "picked up".
+      if (this.blockDrag && this.blockDrag.src === lb.block) {
+        p.roundedRect(this.rect.x + 8, by - 4, this.rect.w - 16, lb.height + 8, 8,
+          [t.caret[0], t.caret[1], t.caret[2], 0.10]);
+      }
+
+      // Transform flash — a soft highlight that fades after a markdown
+      // shortcut or slash command retypes the block.
+      if (this.flashAnim && this.flashAnim.block === block.id) {
+        const fade = 1 - clamp01((this.time - this.flashAnim.t0) / FLASH_DUR);
+        if (fade > 0) {
+          p.roundedRect(this.rect.x + 8, by - 4, this.rect.w - 16, lb.height + 8, 8,
+            [t.caret[0], t.caret[1], t.caret[2], 0.16 * fade]);
+        }
       }
     }
 
@@ -1088,25 +1965,7 @@ export class EditorSurface implements ScreenUiCompositor {
       }
 
       for (const seg of line.segments) {
-        const text = seg.runText.slice(seg.start, seg.end);
-        if (!text) continue;
-        const chunk = this.cache.getChunk(seg.faceKey, seg.sizePx, text);
-        if (!chunk || !chunk.region) continue;
-        const penX = ox + seg.x;
-        // Snap the quad origin to whole pixels — a coverage-atlas blit is
-        // sharpest when it lands on integer device pixels.
-        const imgX = Math.round(penX + chunk.inkX);
-        const imgY = Math.round(oy + line.baseline - chunk.baselineInBitmap);
-        const color = seg.style.code && block.kind !== "codeblock" ? t.codeText : seg.style.color;
-        p.text(imgX, imgY, chunk.w, chunk.h, { region: chunk.region, atlasSize: this.atlas.size }, color);
-
-        const segW = (seg.run.clusterOffsets[seg.end] ?? 0) - (seg.run.clusterOffsets[seg.start] ?? 0);
-        if (seg.style.underline) {
-          p.rect(penX, oy + line.baseline + 2, segW, 1.5, seg.style.color);
-        }
-        if (seg.style.strikethrough) {
-          p.rect(penX, oy + line.baseline - seg.run.ascent * 0.32, segW, 1.5, seg.style.color);
-        }
+        this.drawSegmentText(p, seg, block, line, ox, oy);
       }
     }
 
@@ -1115,17 +1974,68 @@ export class EditorSurface implements ScreenUiCompositor {
       p.roundedRect(ox + this.caretShownX - 1, oy + this.caretShownY, 2, this.caretH, 1, t.caret);
     }
 
+    // Gutter drag grip + block drop indicator — body content (scissored).
+    this.renderGrip(p, ox, oy, t);
+    this.renderBlockDragIndicator(p, ox, oy, t);
+
     const bodyEnd = p.quadCount;
 
-    // Slash menu + format toolbar overlays — unclipped.
+    // Slash menu + format toolbar + scrollbar overlays — unclipped.
     this.renderSlashMenu(p, ox, oy, t);
     this.renderToolbar(p, t);
+    this.renderScrollbar(p, t);
+    this.renderCtxMenu(p, t);
 
     p.renderRanges(pass, surfaceW, surfaceH, this.atlas, this.time, [
       { start: 0, end: bodyStart },
       { start: bodyStart, end: bodyEnd, scissor: [this.rect.x, clipY, this.rect.w, this.rect.y + this.rect.h - clipY] },
       { start: bodyEnd, end: p.quadCount },
     ]);
+  }
+
+  /** Draw one laid segment's text slice plus its underline/strike marks. */
+  private drawSegmentText(p: GpuTextPass, seg: LaidSegment, block: Block, line: LaidLine, ox: number, oy: number): void {
+    const text = seg.runText.slice(seg.start, seg.end);
+    if (!text) return;
+    const t = this.theme;
+    let color = seg.style.code && block.kind !== "codeblock" ? t.codeText : seg.style.color;
+    // Completed todos render dimmed.
+    if (block.kind === "todo" && block.checked) color = [color[0], color[1], color[2], color[3] * 0.55];
+    const baselineY = oy + line.baseline;
+    const co = seg.run.clusterOffsets;
+    const segW = (co[seg.end] ?? 0) - (co[seg.start] ?? 0);
+
+    const chunk = this.cache.getChunk(seg.faceKey, seg.sizePx, text);
+    if (chunk?.region) {
+      // Snap the quad origin to whole pixels — a coverage-atlas blit is
+      // sharpest when it lands on integer device pixels.
+      const imgX = Math.round(ox + seg.x + chunk.inkX);
+      const imgY = Math.round(baselineY - chunk.baselineInBitmap);
+      p.text(imgX, imgY, chunk.w, chunk.h, { region: chunk.region, atlasSize: this.atlas.size }, color);
+    }
+
+    const penX = ox + seg.x;
+    if (seg.style.underline) {
+      p.rect(penX, baselineY + 2, segW, 1.5, seg.style.color);
+    }
+    if (seg.style.strikethrough) {
+      p.rect(penX, baselineY - seg.run.ascent * 0.32, segW, 1.5, seg.style.color);
+    }
+  }
+
+  /** Thin scrollbar on the right edge — fades in while scrolling, hides idle. */
+  private renderScrollbar(p: GpuTextPass, t: EditorTheme): void {
+    const max = this.maxScroll();
+    if (max <= 0) return;
+    const idle = this.time - this.scrollActiveT;
+    const a = this.scrollDrag ? 1 : clamp01(1 - (idle - 0.9) / 0.35);
+    if (a <= 0) return;
+    const trackH = this.rect.h - 8;
+    const total = (this.layout?.height ?? 0) + PAD_TOP + TITLE_H + PAD_BOTTOM;
+    const thumbH = Math.max(28, trackH * (this.rect.h / Math.max(total, 1)));
+    const ty = this.rect.y + 4 + (trackH - thumbH) * (this.scrollY / max);
+    p.roundedRect(this.rect.x + this.rect.w - 5, ty, 3, thumbH, 1.5,
+      [t.text[0], t.text[1], t.text[2], 0.4 * a]);
   }
 
   private pageTitle(): string {
@@ -1164,8 +2074,8 @@ export class EditorSurface implements ScreenUiCompositor {
       chunk.w, chunk.h, { region: chunk.region, atlasSize: this.atlas.size }, t.textMuted);
   }
 
-  private drawMarker(blockIdx: number, line: { baseline: number; blockStart: number }, ox: number, oy: number, p: GpuTextPass): void {
-    if (line.blockStart !== 0) return; // marker on the block's first line only
+  private drawMarker(blockIdx: number, line: { baseline: number; blockFirst: boolean }, ox: number, oy: number, p: GpuTextPass): void {
+    if (!line.blockFirst) return; // marker on the block's first line only
     const block = this.doc.blocks[blockIdx]!;
     const label = `${block.num ?? 1}.`;
     const chunk = this.cache.getChunk("inter:400:normal", 16, label);
@@ -1175,28 +2085,43 @@ export class EditorSurface implements ScreenUiCompositor {
     }
   }
 
-  private drawCheckbox(block: Block, line: { y: number; height: number; baseline: number; blockStart: number },
+  private drawCheckbox(block: Block, line: { y: number; height: number; baseline: number; blockFirst: boolean },
     ox: number, oy: number, p: GpuTextPass, t: EditorTheme): void {
-    if (line.blockStart !== 0) return;
+    if (!line.blockFirst) return;
     const s = 14;
     const x = ox - 24;
     const y = oy + line.baseline - s / 2 - 2;
+    // Fresh toggle → pop the box + scale the check in.
+    const anim = this.animationsOn && this.todoAnim && this.todoAnim.block === block.id
+      ? clamp01((this.time - this.todoAnim.t0) / CHECK_DUR) : 1;
+    const pop = anim < 1 ? easeOutBack(anim) : 1;
+    const boxS = s * (0.85 + 0.15 * pop);
+    const bx = x + (s - boxS) / 2;
+    const by = y + (s - boxS) / 2;
     // Border ring.
-    p.roundedRect(x, y, s, s, 4, block.checked ? t.caret : [t.bulletColor[0], t.bulletColor[1], t.bulletColor[2], 0.55]);
-    // Inner fill.
-    p.roundedRect(x + 1.5, y + 1.5, s - 3, s - 3, 3,
-      block.checked ? t.caret : [0.098, 0.106, 0.118, 1]);
+    p.roundedRect(bx, by, boxS, boxS, 4, block.checked ? t.caret : [t.bulletColor[0], t.bulletColor[1], t.bulletColor[2], 0.55]);
+    // Inner fill — unchecked shows the page background through the ring.
+    p.roundedRect(bx + 1.5, by + 1.5, boxS - 3, boxS - 3, 3,
+      block.checked ? t.caret : t.bg);
+    // Expanding pulse ring on toggle.
+    if (anim < 1) {
+      const ring = s * (0.6 + 0.8 * anim);
+      p.roundedRect(x + (s - ring) / 2, y + (s - ring) / 2, ring, ring, ring / 2,
+        [t.caret[0], t.caret[1], t.caret[2], 0.5 * (1 - anim)]);
+    }
     if (block.checked) {
       const chk = this.cache.getChunk("inter:700:normal", 12, "✓");
       if (chk?.region) {
-        p.text(x + (s - chk.w) / 2, y + (s - chk.h) / 2 - 1, chk.w, chk.h,
-          { region: chk.region, atlasSize: this.atlas.size }, [1, 1, 1, 1]);
+        const cw = chk.w * pop;
+        const chh = chk.h * pop;
+        p.text(x + (s - cw) / 2, y + (s - chh) / 2 - 1, cw, chh,
+          { region: chk.region, atlasSize: this.atlas.size }, [1, 1, 1, anim]);
       }
     }
   }
 
   private renderSlashMenu(p: GpuTextPass, ox: number, oy: number, t: EditorTheme): void {
-    if (!this.slash || this.slash.items.length === 0) { this.slash && (this.slash.rect = null); return; }
+    if (!this.slash || this.slash.items.length === 0) { if (this.slash) this.slash.rect = null; return; }
     const itemH = 30;
     const w = 260;
     const h = this.slash.items.length * itemH + 12;
@@ -1207,38 +2132,203 @@ export class EditorSurface implements ScreenUiCompositor {
     const y = cy + h > this.rect.y + this.rect.h - 4 ? oy + this.caretShownY - h - 6 : cy;
     this.slash.rect = { x, y, w, h };
 
-    p.roundedRect(x, y, w, h, 8, [0.16, 0.17, 0.21, 0.98]);
-    p.roundedRect(x, y, w, 1, 0, [0.30, 0.32, 0.40, 0.6]);
+    // Rise-in animation: fade + small upward drift.
+    const e = this.animationsOn ? easeOutCubic(clamp01((this.time - this.slash.t0) / POP_DUR)) : 1;
+    const dy = (1 - e) * 5;
+    const fade = (c: Rgba): Rgba => [c[0], c[1], c[2], c[3] * e];
+
+    // Hairline border under the fill so light menus read against the page.
+    if (t.toolbarBg[0] > 0.5) {
+      p.roundedRect(x - 1, y + dy - 1, w + 2, h + 2, 9, fade(t.divider));
+    }
+    p.roundedRect(x, y + dy, w, h, 8, fade(t.toolbarBg));
+    p.roundedRect(x, y + dy, w, 1, 0, fade(t.divider));
     for (let i = 0; i < this.slash.items.length; i++) {
       const item = this.slash.items[i]!;
-      const iy = y + 6 + i * itemH;
+      const iy = y + dy + 6 + i * itemH;
       if (i === this.slash.index) {
-        p.roundedRect(x + 4, iy, w - 8, itemH, 6, [0.30, 0.42, 0.75, 0.35]);
+        p.roundedRect(x + 4, iy, w - 8, itemH, 6, fade([0.30, 0.42, 0.75, 0.35]));
       }
       const label = this.cache.getChunk("inter:500:normal", 14, item.label);
       if (label?.region) {
-        p.text(x + 12, iy + 4, label.w, label.h, { region: label.region, atlasSize: this.atlas.size }, t.text);
+        p.text(x + 12, iy + 4, label.w, label.h, { region: label.region, atlasSize: this.atlas.size }, fade(t.text));
       }
       const hint = this.cache.getChunk("inter:400:normal", 12, item.hint);
       if (hint?.region) {
-        p.text(x + w - hint.w - 12, iy + 9, hint.w, hint.h, { region: hint.region, atlasSize: this.atlas.size }, t.textMuted);
+        p.text(x + w - hint.w - 12, iy + 9, hint.w, hint.h, { region: hint.region, atlasSize: this.atlas.size }, fade(t.textMuted));
       }
     }
   }
 
+  /** Whether the whole current selection already carries format `id`. */
+  private selectionHas(id: string): boolean {
+    if (this.anchor === null) return false;
+    const a = docCompare(this.anchor, this.caret) <= 0 ? this.anchor : this.caret;
+    const b = docCompare(this.anchor, this.caret) <= 0 ? this.caret : this.anchor;
+    for (let bi = a.block; bi <= b.block; bi++) {
+      const blk = this.doc.blocks[bi]!;
+      const s = bi === a.block ? a.offset : 0;
+      const e = bi === b.block ? b.offset : blockText(blk).length;
+      if (e > s && !rangeHasStyle(blk, s, e, id)) return false;
+    }
+    return true;
+  }
+
   private renderToolbar(p: GpuTextPass, t: EditorTheme): void {
-    if (!this.toolbar || this.anchor === null) { this.toolbar = null; return; }
+    if (this.anchor === null) { this.toolbar = null; return; }
+    // Lazily appear whenever a non-collapsed selection exists — covers
+    // keyboard-made selections (shift+arrows/home/end) which never hit the
+    // pointer-up showToolbar path. Suppressed while the context menu is up —
+    // otherwise it re-pops on the same selection every frame.
+    if (!this.ctxMenu && !this.toolbar && docCompare(this.anchor, this.caret) !== 0) this.showToolbar();
+    if (!this.toolbar) return;
+    // Keep the rect glued to the selection while it keeps changing (e.g.
+    // holding shift+arrow grows the highlight under a keyboard user's hand).
+    const [sa, sb] = docCompare(this.anchor, this.caret) <= 0
+      ? [this.anchor, this.caret] : [this.caret, this.anchor];
+    if (docCompare(sa, this.toolbar.forA) !== 0 || docCompare(sb, this.toolbar.forB) !== 0) {
+      this.showToolbar();
+    }
+    if (!this.toolbar) return;
     const r = this.toolbar.rect;
-    p.roundedRect(r.x, r.y, r.w, r.h, 8, [0.16, 0.17, 0.21, 0.98]);
+    const e = this.animationsOn ? easeOutCubic(clamp01((this.time - this.toolbar.t0) / POP_DUR)) : 1;
+    const dy = (1 - e) * 4;
+    const fade = (c: Rgba): Rgba => [c[0], c[1], c[2], c[3] * e];
+    // Light toolbars need a hairline border to read against the page —
+    // draw the border as a 1px-larger rect behind the fill.
+    if (t.toolbarBg[0] > 0.5) {
+      p.roundedRect(r.x - 1, r.y + dy - 1, r.w + 2, r.h + 2, 9, fade(t.divider));
+    }
+    p.roundedRect(r.x, r.y + dy, r.w, r.h, 8, fade(t.toolbarBg));
     let x = r.x + 6;
     for (const btn of TOOLBAR_BTNS) {
+      if (this.selectionHas(btn.id)) {
+        p.roundedRect(x + 1, r.y + dy + 3, btn.w - 2, r.h - 6, 5,
+          fade([t.selection[0], t.selection[1], t.selection[2], 0.35]));
+      }
       const style = btn.id === "bold" ? "inter:700:normal" : btn.id === "italic" ? "inter:400:italic" : "inter:400:normal";
       const label = this.cache.getChunk(style, 13, btn.label);
       if (label?.region) {
-        p.text(x + (btn.w - label.w) / 2, r.y + (r.h - label.h) / 2 + 1, label.w, label.h,
-          { region: label.region, atlasSize: this.atlas.size }, t.text);
+        p.text(x + (btn.w - label.w) / 2, r.y + dy + (r.h - label.h) / 2 + 1, label.w, label.h,
+          { region: label.region, atlasSize: this.atlas.size }, fade(t.toolbarText));
       }
       x += btn.w;
+    }
+  }
+
+  /** Six-dot drag grip in the left gutter for the hovered (or dragged)
+   *  block — AppFlowy/Notion block handle. */
+  private renderGrip(p: GpuTextPass, ox: number, oy: number, t: EditorTheme): void {
+    this.gripRect = null;
+    const hb = this.blockDrag ? this.blockDrag.src : this.hoverBlock;
+    if (hb < 0 || !this.layout) return;
+    const lb = this.layout.blocks[hb];
+    if (!lb) return;
+    // Center the grip on the block's first line.
+    const first = this.layout.lines.find(l => l.block === hb);
+    const cy = oy + lb.y + (first ? first.height : lb.height) / 2;
+    const gx = ox - 46;
+    this.gripRect = { x: gx, y: cy - 11, w: 24, h: 22 };
+    const hot = this.gripHot || this.blockDrag !== null;
+    if (hot) {
+      p.roundedRect(gx, cy - 11, 24, 22, 5, [t.text[0], t.text[1], t.text[2], 0.09]);
+    }
+    const a = hot ? 0.8 : 0.45;
+    const c: Rgba = [t.textMuted[0], t.textMuted[1], t.textMuted[2], a];
+    for (let r = 0; r < 3; r++) {
+      for (let cIdx = 0; cIdx < 2; cIdx++) {
+        p.roundedRect(gx + 6 + cIdx * 8, cy - 7 + r * 6, 3.4, 3.4, 1.7, c);
+      }
+    }
+  }
+
+  /** Horizontal drop line + leading nub at the block insertion slot. */
+  private renderBlockDragIndicator(p: GpuTextPass, ox: number, oy: number, t: EditorTheme): void {
+    if (!this.blockDrag || !this.blockDrag.moved) return;
+    const iy = oy + this.insertLineY(this.blockDrag.insert);
+    p.roundedRect(ox - 6, iy - 1.5, this.rect.w - PAD_X * 2 + 6, 3, 1.5, t.caret);
+    p.roundedRect(ox - 12, iy - 4.5, 8, 8, 4, t.caret);
+  }
+
+  /** Right-click / block-action menu with the "Turn into" type submenu. */
+  private renderCtxMenu(p: GpuTextPass, t: EditorTheme): void {
+    const m = this.ctxMenu;
+    if (!m) return;
+    const rowH = MENU_ROW_H;
+    const h = m.rows.reduce((n, r) => n + ("sep" in r ? MENU_SEP_H : rowH), 0) + MENU_PAD * 2;
+    const w = MENU_W;
+    const x = clamp(m.x, this.rect.x + 4, Math.max(this.rect.x + 4, this.rect.x + this.rect.w - w - 4));
+    const y = m.y + h > this.rect.y + this.rect.h - 4 ? Math.max(this.rect.y + 4, this.rect.y + this.rect.h - h - 4) : m.y;
+    m.rect = { x, y, w, h };
+
+    const e = this.animationsOn ? easeOutCubic(clamp01((this.time - m.t0) / POP_DUR)) : 1;
+    const dy = (1 - e) * 4;
+    const fade = (c: Rgba): Rgba => [c[0], c[1], c[2], c[3] * e];
+    if (t.toolbarBg[0] > 0.5) {
+      p.roundedRect(x - 1, y + dy - 1, w + 2, h + 2, 9, fade(t.divider));
+    }
+    p.roundedRect(x, y + dy, w, h, 8, fade(t.toolbarBg));
+
+    let ry = y + dy + MENU_PAD;
+    for (let i = 0; i < m.rows.length; i++) {
+      const row = m.rows[i]!;
+      if ("sep" in row) {
+        p.rect(x + 10, ry + 4, w - 20, 1, fade(t.divider));
+        ry += MENU_SEP_H;
+        continue;
+      }
+      if (i === m.index && !row.disabled) {
+        p.roundedRect(x + 4, ry, w - 8, rowH, 5,
+          fade([t.selection[0], t.selection[1], t.selection[2], 0.35]));
+      }
+      const color: Rgba = row.disabled
+        ? [t.textMuted[0], t.textMuted[1], t.textMuted[2], 0.45 * e]
+        : fade(t.text);
+      const label = this.cache.getChunk("inter:400:normal", 13, row.label);
+      if (label?.region) {
+        p.text(x + 12, ry + (rowH - label.h) / 2 + 1, label.w, label.h,
+          { region: label.region, atlasSize: this.atlas.size }, color);
+      }
+      if (row.hint) {
+        const hint = this.cache.getChunk("inter:400:normal", 11, row.hint);
+        if (hint?.region) {
+          p.text(x + w - hint.w - 12, ry + (rowH - hint.h) / 2 + 1, hint.w, hint.h,
+            { region: hint.region, atlasSize: this.atlas.size }, fade(t.textMuted));
+        }
+      }
+      ry += rowH;
+    }
+
+    // "Turn into" submenu — same block-type list as the slash menu.
+    if (!m.subOpen) { m.subRect = null; return; }
+    const turnIdx = m.rows.findIndex(r => !("sep" in r) && r.id === "turn");
+    const sw = SUB_W;
+    const sh = SLASH_ITEMS.length * rowH + MENU_PAD * 2;
+    const sx = x + w + 2 + sw > this.rect.x + this.rect.w - 4 ? x - sw - 2 : x + w + 2;
+    const sy = clamp(this.menuRowTop(m, Math.max(0, turnIdx)) + dy - 2,
+      this.rect.y + 4, Math.max(this.rect.y + 4, this.rect.y + this.rect.h - sh - 4));
+    m.subRect = { x: sx, y: sy, w: sw, h: sh };
+    if (t.toolbarBg[0] > 0.5) {
+      p.roundedRect(sx - 1, sy - 1, sw + 2, sh + 2, 9, fade(t.divider));
+    }
+    p.roundedRect(sx, sy, sw, sh, 8, fade(t.toolbarBg));
+    const curKind = this.doc.blocks[clamp(m.pos.block, 0, Math.max(0, this.doc.blocks.length - 1))]?.kind;
+    for (let i = 0; i < SLASH_ITEMS.length; i++) {
+      const item = SLASH_ITEMS[i]!;
+      const iy = sy + MENU_PAD + i * rowH;
+      if (i === m.subIndex) {
+        p.roundedRect(sx + 4, iy, sw - 8, rowH, 5,
+          fade([t.selection[0], t.selection[1], t.selection[2], 0.35]));
+      }
+      const label = this.cache.getChunk("inter:400:normal", 13, item.label);
+      if (label?.region) {
+        p.text(sx + 12, iy + (rowH - label.h) / 2 + 1, label.w, label.h,
+          { region: label.region, atlasSize: this.atlas.size }, fade(t.text));
+      }
+      // Dot marks the target block's current kind.
+      if (item.kind === curKind) {
+        p.roundedRect(sx + sw - 18, iy + rowH / 2 - 3, 6, 6, 3, fade(t.caret));
+      }
     }
   }
 
@@ -1298,7 +2388,23 @@ function takeSpansFrom(b: { spans: SpanLike[] }, off: number): SpanLike[] {
   return tail;
 }
 
+interface FormatDef {
+  has: (s: TextStyle) => boolean;
+  on: Partial<TextStyle>;
+  off: Partial<TextStyle>;
+}
+
+const FORMAT: Record<string, FormatDef> = {
+  bold:      { has: (s) => s.weight >= 700, on: { weight: 700 }, off: { weight: 400 } },
+  italic:    { has: (s) => !!s.italic, on: { italic: true }, off: { italic: false } },
+  underline: { has: (s) => !!s.underline, on: { underline: true }, off: { underline: false } },
+  strike:    { has: (s) => !!s.strikethrough, on: { strikethrough: true }, off: { strikethrough: false } },
+  code:      { has: (s) => !!s.code, on: { code: true }, off: { code: false } },
+};
+
 function rangeHasStyle(b: Block, start: number, end: number, id: string): boolean {
+  const f = FORMAT[id];
+  if (!f) return false;
   let pos = 0;
   let all = true;
   let seen = false;
@@ -1307,35 +2413,87 @@ function rangeHasStyle(b: Block, start: number, end: number, id: string): boolea
     const s1 = pos + sp.text.length;
     if (s1 > start && s0 < end) {
       seen = true;
-      const has =
-        id === "bold" ? sp.style.weight >= 700 :
-        id === "italic" ? !!sp.style.italic :
-        id === "underline" ? !!sp.style.underline :
-        id === "strike" ? !!sp.style.strikethrough :
-        !!sp.style.code;
-      if (!has) all = false;
+      if (!f.has(sp.style)) all = false;
     }
     pos = s1;
   }
   return seen && all;
 }
 
-function inversePatch(id: string): Partial<TextStyle> {
-  switch (id) {
-    case "bold": return { weight: 400 };
-    case "italic": return { italic: false };
-    case "underline": return { underline: false };
-    case "strike": return { strikethrough: false };
-    default: return { code: false };
-  }
-}
-
 function inside(x: number, y: number, r: { x: number; y: number; w: number; h: number }): boolean {
   return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
 }
 
+function isHighSurrogate(c: number): boolean { return c >= 0xD800 && c <= 0xDBFF; }
+function isLowSurrogate(c: number): boolean { return c >= 0xDC00 && c <= 0xDFFF; }
+
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
+}
+
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+function easeOutCubic(t: number): number {
+  return 1 - Math.pow(1 - t, 3);
+}
+
+function easeOutBack(t: number): number {
+  const c = 1.70158;
+  return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2);
+}
+
+// ── Markdown paste ──────────────────────────────────────────────────────────
+
+interface ParsedBlock {
+  kind: BlockKind;
+  text: string;
+  checked?: boolean;
+  num?: number;
+  lang?: string;
+}
+
+/** Parse pasted text into typed blocks when it looks like markdown — i.e.
+ *  the FIRST line carries a block marker ("# ", "- ", "```", "1. ", "> "…).
+ *  Returns null for plain prose so paste stays verbatim. */
+function parseMarkdownLines(text: string): ParsedBlock[] | null {
+  const lines = text.split("\n");
+  for (; lines.length && lines[lines.length - 1] === "";) lines.pop();
+  if (lines.length === 0) return null;
+
+  const itemFor = (line: string): ParsedBlock | null => {
+    let m = line.match(/^(#{1,3})\s+(.*)$/);
+    if (m) return { kind: m[1]!.length === 1 ? "h1" : m[1]!.length === 2 ? "h2" : "h3", text: m[2]! };
+    if ((m = line.match(/^>\s?(.*)$/))) return { kind: "quote", text: m[1]! };
+    if ((m = line.match(/^[-*+]\s+\[([ xX])\]\s+(.*)$/)))
+      return { kind: "todo", text: m[2]!, checked: m[1]!.toLowerCase() === "x" };
+    if ((m = line.match(/^[-*+•]\s+(.*)$/))) return { kind: "bullet", text: m[1]! };
+    if ((m = line.match(/^(\d{1,9})[.)]\s+(.*)$/))) return { kind: "number", text: m[2]!, num: parseInt(m[1]!, 10) || 1 };
+    if (/^(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) return { kind: "divider", text: "" };
+    return null;
+  };
+
+  // Require a marker on the first line — markdown conversion is opt-in by
+  // shape, so pasting regular prose never restructures blocks.
+  if (!itemFor(lines[0]!) && !lines[0]!.startsWith("```")) return null;
+
+  const items: ParsedBlock[] = [];
+  for (let i = 0; i < lines.length;) {
+    const line = lines[i]!;
+    const fence = line.match(/^```(\w*)\s*$/);
+    if (fence) {
+      const body: string[] = [];
+      i++;
+      for (; i < lines.length && !/^```\s*$/.test(lines[i]!);) body.push(lines[i++]!);
+      i++; // consume closing fence (or run off the end)
+      items.push({ kind: "codeblock", text: body.join("\n"), lang: fence[1] || "ts" });
+      continue;
+    }
+    items.push(itemFor(line) ?? { kind: "paragraph", text: line });
+    i++;
+  }
+  return items.length ? items : null;
 }
 
 export function darkTheme(): EditorTheme {
@@ -1347,9 +2505,12 @@ export function darkTheme(): EditorTheme {
     selection: [0.30, 0.42, 0.75, 0.35],
     codeBg: [0.13, 0.14, 0.18, 1],
     codeText: [0.78, 0.82, 0.95, 1],
+    calloutBg: [0.16, 0.19, 0.28, 1],
     quoteBar: [0.45, 0.62, 0.98, 0.9],
     divider: [0.28, 0.30, 0.36, 1],
     bulletColor: [0.55, 0.57, 0.64, 1],
+    toolbarBg: [0.16, 0.17, 0.21, 0.98],
+    toolbarText: [0.90, 0.91, 0.96, 1],
     syntax: darkSyntax,
   };
 }
@@ -1363,9 +2524,12 @@ export function lightTheme(): EditorTheme {
     selection: [0.35, 0.55, 0.98, 0.25],
     codeBg: [0.93, 0.94, 0.96, 1],
     codeText: [0.25, 0.28, 0.50, 1],
+    calloutBg: [0.88, 0.91, 0.98, 1],
     quoteBar: [0.20, 0.42, 0.95, 0.9],
     divider: [0.82, 0.83, 0.87, 1],
     bulletColor: [0.45, 0.47, 0.52, 1],
+    toolbarBg: [1, 1, 1, 0.98],
+    toolbarText: [0.16, 0.17, 0.21, 1],
     syntax: lightSyntax,
   };
 }
