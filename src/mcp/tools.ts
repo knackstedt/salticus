@@ -8,7 +8,7 @@ import type { GameContext } from "@downdraft/engine/app/main";
 import { jsonResult, type McpToolRegistration } from "@downdraft/engine/app/main/mcp-harness";
 import { store } from "../app/store";
 import { createPage, deletePage, destroyPage, openPage, renamePage } from "../app/actions";
-import { editorSurface } from "../game-module";
+import { editorSurface, wbSurface } from "../game-module";
 
 export function gameMcpTools(_ctx: GameContext): McpToolRegistration[] {
   return [
@@ -38,7 +38,15 @@ export function gameMcpTools(_ctx: GameContext): McpToolRegistration[] {
           ok: true,
           ready: surf.ready,
           caret: surf.caret,
+          anchor: surf.anchor,
           blocks: surf.document.blocks.length,
+          doc: surf.document.blocks.map((b) => ({
+            kind: b.kind,
+            num: b.num,
+            checked: b.checked,
+            text: b.spans.map((s) => s.text).join(""),
+            spans: b.spans.map((s) => ({ t: s.text, w: s.style.weight, i: s.style.italic, u: s.style.underline, s: s.style.strikethrough, c: s.style.code })),
+          })),
           cache: surf.runCache.stats,
         });
       },
@@ -107,6 +115,31 @@ export function gameMcpTools(_ctx: GameContext): McpToolRegistration[] {
     },
     {
       def: {
+        name: "wb_state",
+        description: "Dump whiteboard surface state: item count/kinds, camera, tool, selection, undo depth.",
+        inputSchema: { type: "object", properties: {} },
+      },
+      handler: () => {
+        const surf = wbSurface;
+        if (!surf) return jsonResult({ ok: false, error: "whiteboard not ready" });
+        return jsonResult({ ok: true, ...surf.debugState() });
+      },
+    },
+    {
+      def: {
+        name: "wb_type_text",
+        description: "Insert text into the active whiteboard text edit (bypasses OS text input — for automation).",
+        inputSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
+      },
+      handler: (p) => {
+        const surf = wbSurface;
+        if (!surf) return jsonResult({ ok: false, error: "whiteboard not ready" });
+        surf.insertEditTextPublic(String(p.text ?? ""));
+        return jsonResult({ ok: true });
+      },
+    },
+    {
+      def: {
         name: "open_page",
         description: "Open a page by id (activates it + adds a tab).",
         inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
@@ -148,6 +181,17 @@ export function gameMcpTools(_ctx: GameContext): McpToolRegistration[] {
       handler: (p) => {
         store.setState({ theme: p.theme === "light" ? "light" : "dark" });
         return jsonResult({ ok: true, theme: store.getState().theme });
+      },
+    },
+    {
+      def: {
+        name: "set_editor_animations",
+        description: "Toggle editor animations (flashes, pop-ins). Params: enabled",
+        inputSchema: { type: "object", properties: { enabled: { type: "boolean" } }, required: ["enabled"] },
+      },
+      handler: (p) => {
+        store.setState({ editorAnimations: !!p.enabled });
+        return jsonResult({ ok: true, editorAnimations: store.getState().editorAnimations });
       },
     },
   ];

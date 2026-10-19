@@ -13,15 +13,17 @@ const DRAFT = `${process.env.HOME}/.bun/bin/bun`;
 const cwd = `${import.meta.dir}/..`;
 let failures = 0;
 
+const PID_ARGS = process.env.GN_PID ? ["--pid", process.env.GN_PID] : [];
+
 async function mcp(tool: string, args: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
-  const r = await $`${DRAFT} run draft mcp call ${tool} ${JSON.stringify(args)}`.cwd(cwd).quiet().nothrow();
+  const r = await $`${DRAFT} run draft mcp call ${tool} ${JSON.stringify(args)} ${{ raw: PID_ARGS.join(" ") }}`.cwd(cwd).quiet().nothrow();
   const out = r.stdout.toString().trim();
   if (r.exitCode !== 0) throw new Error(`${tool} failed: ${r.stderr.toString() || out}`);
   try { return JSON.parse(out); } catch { return { raw: out }; }
 }
 
 async function shot(name: string): Promise<void> {
-  await $`${DRAFT} run draft mcp screenshot /tmp/gn-${name}.png`.cwd(cwd).quiet().nothrow();
+  await $`${DRAFT} run draft mcp screenshot /tmp/gn-${name}.png ${{ raw: PID_ARGS.join(" ") }}`.cwd(cwd).quiet().nothrow();
   console.log(`  📸 /tmp/gn-${name}.png`);
 }
 
@@ -93,12 +95,102 @@ await check("create whiteboard page", async () => {
   await shot("whiteboard");
 });
 
-await check("pen stroke", async () => {
-  await click(400, 300, "mousedown");
-  await click(450, 320, "mousemove");
-  await click(500, 310, "mousemove");
-  await click(500, 310, "mouseup");
-  await shot("wb-stroke");
+await check("whiteboard draw rect/ellipse/pen", async () => {
+  await key("r"); // rect tool
+  await click(500, 300, "mousedown");
+  await click(640, 400, "mousemove");
+  await click(640, 400, "mouseup");
+  await key("o"); // ellipse tool
+  await click(700, 300, "mousedown");
+  await click(780, 380, "mousemove");
+  await click(780, 380, "mouseup");
+  await key("p"); // pen tool
+  await click(400, 500, "mousedown");
+  await click(450, 540, "mousemove");
+  await click(560, 500, "mousemove");
+  await click(560, 500, "mouseup");
+  const st = await mcp("wb_state");
+  const kinds = st.kinds as string[];
+  assert((st.items as number) === 3, `expected 3 items, got ${st.items}`);
+  assert(kinds.includes("rect") && kinds.includes("ellipse") && kinds.includes("stroke"),
+    `kinds ${JSON.stringify(kinds)}`);
+  await shot("wb-drawn");
+});
+
+await check("whiteboard select + move", async () => {
+  await key("v"); // select tool
+  // Drag the rect's bottom edge, away from handles — selects + moves in
+  // one motion. (A click at the same spot first would double-click.)
+  await click(520, 400, "mousedown");
+  await click(570, 450, "mousemove");
+  await click(570, 450, "mouseup");
+  let st = await mcp("wb_state");
+  const sel = st.selected as string[];
+  assert(sel.length === 1, `one selected, got ${sel.length}`);
+  const r = (st.detail as { kind: string; x: number; y: number }[]).find((i) => i.kind === "rect");
+  assert(r && r.x > 270, `rect moved (x=${r?.x})`);
+});
+
+await check("whiteboard undo/redo", async () => {
+  await key("z", { ctrlKey: true });
+  let st = await mcp("wb_state");
+  assert((st.items as number) === 3, `undo reverted move (items=${st.items})`);
+  await key("z", { ctrlKey: true });
+  st = await mcp("wb_state");
+  assert((st.items as number) === 2, `undo removed pen (items=${st.items})`);
+  await key("z", { ctrlKey: true, shiftKey: true });
+  st = await mcp("wb_state");
+  assert((st.items as number) === 3, "redo restored pen");
+});
+
+await check("whiteboard bound text", async () => {
+  await key("v");
+  // Select the rect (edge hit), Enter opens bound-text editing.
+  await click(640, 350);
+  await key("Enter");
+  let st = await mcp("wb_state");
+  const ed = st.editing as { field?: string } | null;
+  assert(ed?.field === "boundText", `editing ${JSON.stringify(ed)}`);
+  for (let ci = 0; ci < 2; ci++) await key("hi"[ci]!);
+  await key("Escape");
+  st = await mcp("wb_state");
+  const r = (st.detail as { kind: string; boundText?: string }[]).find((i) => i.kind === "rect");
+  assert(r?.boundText === "hi", `boundText=${JSON.stringify(r?.boundText)}`);
+  await shot("wb-bound-text");
+});
+
+await check("whiteboard group/ungroup", async () => {
+  await key("a", { ctrlKey: true }); // select all
+  await key("g", { ctrlKey: true }); // group
+  let st = await mcp("wb_state");
+  const grouped = (st.detail as { group?: string }[]).filter((i) => i.group).length;
+  assert(grouped === 3, `3 grouped, got ${grouped}`);
+  await key("g", { ctrlKey: true, shiftKey: true }); // ungroup
+  st = await mcp("wb_state");
+  const left = (st.detail as { group?: string }[]).filter((i) => i.group).length;
+  assert(left === 0, `ungrouped, got ${left}`);
+});
+
+await check("whiteboard copy/paste", async () => {
+  await key("v");
+  await click(500, 320); // rect left edge — distinct from earlier clicks
+  await key("c", { ctrlKey: true });
+  await key("v", { ctrlKey: true });
+  const st = await mcp("wb_state");
+  assert((st.items as number) === 4, `paste added item (items=${st.items})`);
+});
+
+await check("whiteboard eraser", async () => {
+  await key("e"); // eraser tool
+  // Dense sweep over the canvas — eraseAt only fires at pointer positions.
+  // (x<470 overlaps the props panel, which swallows the pointerdown.)
+  await click(500, 240, "mousedown");
+  for (let y = 280; y <= 620; y += 35) {
+    for (let x = 500; x <= 840; x += 35) await click(x, y, "mousemove");
+  }
+  await click(840, 640, "mouseup");
+  const st = await mcp("wb_state");
+  assert((st.items as number) === 0, `erased all (items=${st.items})`);
 });
 
 await check("palette open/search/open", async () => {

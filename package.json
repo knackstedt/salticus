@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "draft dev",
+    "dev": "DOWNDRAFT_GPU=swiftshader draft dev",
     "build": "draft release --stage=build",
     "release": "draft release",
     "typecheck": "tsc --noEmit",

@@ -127,7 +127,7 @@ export function mountShell(ui: HtmlUiContext, ctx: GameContext): ShellHandles {
   const unsub = store.subscribe((s) => {
     const key = [
       s.pages, s.rootOrder, s.activePageId, s.openTabs, s.theme, s.saveIndicator,
-      s.sidebarView, s.thumbVersion,
+      s.sidebarView, s.thumbVersion, s.editorAnimations,
     ].map((v) => (typeof v === "object" ? JSON.stringify(v) : v)).join("|");
     if (key !== lastKey) {
       lastKey = key;
@@ -177,6 +177,7 @@ export function mountShell(ui: HtmlUiContext, ctx: GameContext): ShellHandles {
   });
   ui.onAction("toggle-palette", () => store.setState((s) => ({ paletteOpen: !s.paletteOpen })));
   ui.onAction("toggle-theme", () => store.setState((s) => ({ theme: s.theme === "dark" ? "light" : "dark" })));
+  ui.onAction("toggle-animations", () => store.setState((s) => ({ editorAnimations: !s.editorAnimations })));
 
   layout();
   return { sidebar, topbar, rerender, layout };

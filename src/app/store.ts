@@ -52,6 +52,8 @@ export interface AppState {
   windowH: number;
   dpr: number;
   theme: ThemeName;
+  /** Cosmetic editor animations (typewriter pop, flashes, pop-ins). */
+  editorAnimations: boolean;
   saveIndicator: SaveIndicator;
   /** Monotonic counters to nudge compositors/UI to redraw. */
   docVersion: number;
@@ -85,6 +87,7 @@ export const store = createStore<AppState>(() => ({
   windowH: 720,
   dpr: 1,
   theme: "dark",
+  editorAnimations: true,
   saveIndicator: "saved",
   docVersion: 0,
   boardVersion: 0,

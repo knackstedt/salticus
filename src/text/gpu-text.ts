@@ -17,7 +17,7 @@ export const KIND_ROUNDED = 2;
 export const KIND_CAPSULE = 3;
 export const KIND_ELLIPSE = 4;
 
-const FLOATS_PER_INSTANCE = 16; // 4 × vec4f
+const FLOATS_PER_INSTANCE = 20; // 5 × vec4f
 const INITIAL_CAPACITY = 2048;
 
 export type Rgba = [number, number, number, number];
@@ -37,6 +37,9 @@ export class GpuTextPass {
   private count = 0;
   private bindGroup: GPUBindGroup | null = null;
   private boundAtlas: TextAtlas | null = null;
+  /** When set, every quad pushed rotates `angle` rad about (x, y) in surface
+   *  px. Lets a whole item (strokes, rects, text runs) draw rotated. */
+  rotation: { angle: number; x: number; y: number } | null = null;
 
   constructor(readonly device: GPUDevice, format: GPUTextureFormat) {
     const module = device.createShaderModule({ label: "text", code: shaderSource });
@@ -111,6 +114,12 @@ export class GpuTextPass {
     d[o + 4] = src[0]; d[o + 5] = src[1]; d[o + 6] = src[2]; d[o + 7] = src[3];
     d[o + 8] = color[0]; d[o + 9] = color[1]; d[o + 10] = color[2]; d[o + 11] = color[3];
     d[o + 12] = aux[0]; d[o + 13] = aux[1]; d[o + 14] = aux[2]; d[o + 15] = aux[3];
+    const r = this.rotation;
+    if (r) {
+      d[o + 16] = r.angle; d[o + 17] = r.x; d[o + 18] = r.y; d[o + 19] = 0;
+    } else {
+      d[o + 16] = 0; d[o + 17] = 0; d[o + 18] = 0; d[o + 19] = 0;
+    }
   }
 
   /** Draw a coverage-atlas run quad. */
@@ -190,8 +199,8 @@ export class GpuTextPass {
     this.device.queue.writeBuffer(this.instanceBuf, 0, this.data, 0, this.count * FLOATS_PER_INSTANCE);
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, this.bindGroup);
-    for (const r of ranges) {
-      if (r.end <= r.start) continue;
+    ranges.forEach(r => {
+      if (r.end <= r.start) return;
       if (r.scissor) {
         const [sx, sy, sw, sh] = r.scissor;
         pass.setScissorRect(
@@ -201,7 +210,7 @@ export class GpuTextPass {
       }
       pass.draw(6, r.end - r.start, 0, r.start);
       if (r.scissor) pass.setScissorRect(0, 0, surfaceW, surfaceH);
-    }
+    });
   }
 
   destroy(): void {

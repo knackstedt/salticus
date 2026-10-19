@@ -25,6 +25,7 @@ struct Instance {
   src   : vec4f,     // u0, v0, u1, v1 normalized atlas coords (kind 0)
   color : vec4f,
   aux   : vec4f,     // kind, p0, p1, p2
+  aux2  : vec4f,     // rotation: angle (rad), pivot x, pivot y, unused
 };
 
 @group(0) @binding(0) var<uniform> u : Uniforms;
@@ -67,6 +68,16 @@ fn vs(@builtin(vertex_index) vi : u32, @builtin(instance_index) ii : u32) -> VsO
   } else {
     px = instData.dst.xy + c * instData.dst.zw;
     local = c * instData.dst.zw;
+  }
+  // Optional rotation about a pivot — applies to every primitive (text
+  // quads included) so whole items can be drawn rotated by setting aux2.
+  let ang = instData.aux2.x;
+  if (ang != 0.0) {
+    let pv = instData.aux2.yz;
+    let sn = sin(ang);
+    let co = cos(ang);
+    let rel = px - pv;
+    px = pv + vec2f(rel.x * co - rel.y * sn, rel.x * sn + rel.y * co);
   }
   let clip = vec2f(px.x / u.surface.x * 2.0 - 1.0, 1.0 - px.y / u.surface.y * 2.0);
 

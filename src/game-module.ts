@@ -90,12 +90,14 @@ export const gameModule: GameModule = {
         mctx.registerUiCompositor?.(wb);
         mctx.registerUiCompositor?.(palette);
         mctx.onFrame("afterFrame", (dt) => { surf.tick(dt); board.update(dt); wb.update(dt); palette.update(dt); });
+        surf.setAnimationsEnabled(store.getState().editorAnimations);
         let lastTheme = store.getState().theme;
         const unsub = store.subscribe((s) => {
           surf.setRect(s.contentRect);
           board.setRect(s.contentRect);
           wb.setRect(s.contentRect);
           palette.setRect(s.contentRect);
+          surf.setAnimationsEnabled(s.editorAnimations);
           if (s.theme !== lastTheme) {
             lastTheme = s.theme;
             surf.setTheme(s.theme === "dark" ? darkTheme() : lightTheme());

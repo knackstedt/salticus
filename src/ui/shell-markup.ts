@@ -86,6 +86,11 @@ function settingsView(s: AppState): string {
     <div style="padding:4px 14px">
       <div class="gn-faint" style="font-size:11px;padding-bottom:6px">Theme</div>
       <div class="gn-row" style="gap:6px">${themeBtn("dark", "Dark")}${themeBtn("light", "Light")}</div>
+      <div class="gn-faint" style="font-size:11px;padding:14px 0 6px">Editor</div>
+      <div class="gn-row" style="gap:6px">
+        <div class="gn-dim" style="font-size:12px;flex:1">Animations</div>
+        <div class="gn-btn" data-action="toggle-animations" data-active="${s.editorAnimations}">${s.editorAnimations ? "On" : "Off"}</div>
+      </div>
       <div class="gn-faint" style="font-size:11px;padding:14px 0 6px">Workspace</div>
       <div class="gn-dim" style="font-size:11px">JSON workspace · autosave on</div>
       <div class="gn-faint" style="font-size:11px;padding-top:14px">Graphic Notes — built on the DownDraft WebGPU engine.</div>

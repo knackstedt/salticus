@@ -117,7 +117,7 @@ export class TextShaper {
    *  cluster offsets (caret math). Explicit clusters = UTF-16 indices so
    *  surrogate pairs map correctly. */
   shapeGlyphs(key: string, text: string, sizePx: number, withClusters = false): {
-    glyphs: { glyphId: number; penX: number; penY: number }[];
+    glyphs: { glyphId: number; penX: number; penY: number; cluster: number }[];
     advance: number;
     clusterOffsets: Float32Array | null;
     glyphCount: number;
@@ -130,7 +130,7 @@ export class TextShaper {
     let i16 = 0;
     for (const cp of text) {
       buf.add(cp.codePointAt(0)!, i16);
-      i16 += cp > 0xFFFF ? 2 : 1;
+      i16 += cp.length; // cp is a 1-2 UTF-16-unit string — astral chars take 2
     }
     buf.guessSegmentProperties();
 
@@ -139,20 +139,21 @@ export class TextShaper {
 
     const infos = buf.getGlyphInfos();
     const positions = buf.getGlyphPositions();
-    const glyphs: { glyphId: number; penX: number; penY: number }[] = [];
+    const glyphs: { glyphId: number; penX: number; penY: number; cluster: number }[] = [];
     const offsets = withClusters ? new Float32Array(text.length + 1) : null;
 
     let penX = 0;
     let penY = 0;
     let nextBoundary = 0;
     for (let i = 0; i < infos.length; i++) {
+      const cluster = Math.max(0, Math.min(text.length, infos[i]!.cluster));
       glyphs.push({
         glyphId: infos[i]!.codepoint,
         penX: penX + positions[i]!.xOffset,
         penY: penY + positions[i]!.yOffset,
+        cluster,
       });
       if (offsets) {
-        const cluster = Math.max(0, Math.min(text.length, infos[i]!.cluster));
         const nextCluster = i + 1 < infos.length
           ? Math.max(0, Math.min(text.length, infos[i + 1]!.cluster))
           : text.length;

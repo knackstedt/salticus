@@ -92,8 +92,15 @@ export class FtRasterizer {
       ptr(DIMS_OUT) as never, ptr(DIMS_OUT.subarray(1)) as never,
     ) as unknown as number;
     if (n <= 0) return null; // empty raster (e.g. pure whitespace) is valid
-    const w = DIMS_OUT[0]!;
+    let w = DIMS_OUT[0]!;
     const h = DIMS_OUT[1]!;
+    // The shim reports width=0 for some glyph paths (single-glyph CBDT
+    // strikes, ZWJ sequences) while still writing a full bitmap — infer
+    // the width from the byte count when the height is plausible.
+    if (w === 0 && h > 0) {
+      const inferred = Math.floor(n / (4 * h));
+      if (inferred * 4 * h === n && inferred <= MAX_W) w = inferred;
+    }
     if (w <= 0 || h <= 0 || w * h * 4 > n) {
       log.warn("ft", `render dims=${w}x${h} n=${n} h=${handle} text=${JSON.stringify(text.slice(0, 24))}`);
       return null;

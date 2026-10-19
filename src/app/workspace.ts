@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { resolveNativeUserDataDir } from "@downdraft/platform-native";
 import { createLogger } from "@downdraft/engine/util/logger";
 import { newId, store, type PageMeta } from "./store";
-import { newBlockId, type Doc } from "../editor/model";
+import { type Doc } from "../editor/model";
 import { demoDoc } from "./demo-doc";
 
 const log = createLogger();
@@ -135,12 +135,24 @@ export function loadPageContent(id: string): PageContent | null {
 // Stray "\r" chars were persisted by an earlier textinput bug (winit emits
 // "\r" for Enter while keydown already split the block). Strip them from
 // prose blocks; in codeblocks they mean a line break, so map to "\n".
+// Also drop span colors that just re-state a theme's text color — those
+// were baked at insert time and break theme switching.
 function sanitizeDoc(c: PageContent): void {
   if (c.type !== "doc" || !c.doc?.blocks) return;
+  const themeTexts = [
+    [0.82, 0.84, 0.90, 1], // darkTheme().text
+    [0.16, 0.17, 0.21, 1], // lightTheme().text
+    [0.78, 0.82, 0.95, 1], // darkTheme().codeText
+    [0.25, 0.28, 0.50, 1], // lightTheme().codeText
+  ];
   for (const b of c.doc.blocks) {
     const map = b.kind === "codeblock" ? "\n" : "";
     for (const sp of b.spans) {
       if (sp.text.includes("\r")) sp.text = sp.text.replace(/\r\n?/g, map).replace(/\r/g, map);
+      const col = sp.style?.color;
+      if (col && themeTexts.some(t => Math.abs(t[0]! - col[0]) < 0.02 && Math.abs(t[1]! - col[1]) < 0.02 && Math.abs(t[2]! - col[2]) < 0.02)) {
+        delete sp.style.color;
+      }
     }
   }
 }

@@ -14,7 +14,8 @@ export interface TextStyle {
   weight: number;
   italic: boolean;
   sizePx: number;
-  color: Rgba;
+  /** Absent = theme's default text color (theme-switch safe). */
+  color?: Rgba;
   /** Inline code — renders mono with a rounded bg. */
   code?: boolean;
   underline?: boolean;
