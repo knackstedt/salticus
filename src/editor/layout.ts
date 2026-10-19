@@ -10,7 +10,7 @@
 // ============================================================================
 
 import { RunCache, type RunShape } from "../text/run-cache";
-import { EMOJI_FACE, faceKey } from "../text/fonts";
+import { FALLBACK_FACES, faceKey } from "../text/fonts";
 import { blockBaseStyle, blockText, type Block, type Doc, type DocPos, type TextStyle } from "./model";
 import { highlightLine, type SyntaxPalette } from "./highlight";
 
@@ -246,43 +246,17 @@ export class DocLayouter {
     const runs: BlockRun[] = [];
     let off = 0;
     // Emit one run per contiguous coverage slice — codepoints missing from
-    // the primary face (emoji, rare symbols) get re-shaped against the emoji
-    // fallback face instead of drawing tofu. Without a fallback face, text
+    // the primary face (emoji, CJK, rare symbols) get re-shaped against the
+    // fallback chain instead of drawing tofu. Without any fallback face, text
     // stays in the primary face (same .notdef behavior as before).
-    const fallback = this.cache.hasFace(EMOJI_FACE);
+    const chain = FALLBACK_FACES.map(f => f.key).filter(k => this.cache.hasFace(k));
     const emit = (text: string, style: TextStyle, fk: string) => {
-      const missing = fallback ? this.cache.missingRanges(fk, style.sizePx, text) : [];
-      let cursor = 0;
-      missing.forEach(([ms, me]) => {
-        if (ms > cursor) {
-          const piece = text.slice(cursor, ms);
-          runs.push({ shape: this.cache.getRun(fk, style.sizePx, piece), text: piece, style, faceKey: fk, sizePx: style.sizePx, blockOff: off + cursor });
-        }
-        // Split the fallback slice on ZWJ — the rasterizer can't ligate ZWJ
-        // sequences, so 👨‍👩‍👧 renders better as separate silhouettes than
-        // as the fallback face's .notdef box. ZWJ chars themselves go to the
-        // primary face (invisible, zero-advance).
-        let segStart = ms;
-        for (let j = ms; j < me; j++) {
-          if (text.charCodeAt(j) !== 0x200D) continue;
-          if (j > segStart) {
-            const piece = text.slice(segStart, j);
-            runs.push({ shape: this.cache.getRun(EMOJI_FACE, style.sizePx, piece), text: piece, style, faceKey: EMOJI_FACE, sizePx: style.sizePx, blockOff: off + segStart });
-          }
-          const zw = text.slice(j, j + 1);
-          runs.push({ shape: this.cache.getRun(fk, style.sizePx, zw), text: zw, style, faceKey: fk, sizePx: style.sizePx, blockOff: off + j });
-          segStart = j + 1;
-        }
-        if (segStart < me) {
-          const piece = text.slice(segStart, me);
-          runs.push({ shape: this.cache.getRun(EMOJI_FACE, style.sizePx, piece), text: piece, style, faceKey: EMOJI_FACE, sizePx: style.sizePx, blockOff: off + segStart });
-        }
-        cursor = me;
+      this.cache.fallbackPieces(fk, style.sizePx, text, chain).forEach(p => {
+        runs.push({
+          shape: p.text ? this.cache.getRun(p.face, style.sizePx, p.text) : null,
+          text: p.text, style, faceKey: p.face, sizePx: style.sizePx, blockOff: off + p.start,
+        });
       });
-      if (cursor < text.length || cursor === 0) {
-        const piece = text.slice(cursor);
-        runs.push({ shape: piece ? this.cache.getRun(fk, style.sizePx, piece) : null, text: piece, style, faceKey: fk, sizePx: style.sizePx, blockOff: off + cursor });
-      }
       off += text.length;
     };
     block.spans.forEach(span => {

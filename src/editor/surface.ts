@@ -869,9 +869,10 @@ export class EditorSurface implements ScreenUiCompositor {
 
   private insertText(text: string): void {
     // Normalize CR-style line breaks (IME commits, winit textinput) and drop
-    // other control chars that would rasterize as tofu.
+    // other control chars that would rasterize as tofu. Includes the C1 range
+    // (U+0080–U+009F) — never printable, always a paste/encoding accident.
     // oxlint-disable-next-line no-control-regex — intentional: strips control chars
-    const clean = text.replace(/\r\n?/g, "\n").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+    const clean = text.replace(/\r\n?/g, "\n").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, "");
     for (let ti = 0; ti < clean.length; ti++) {
       this.insertChar(clean[ti]!);
     }
@@ -1390,7 +1391,8 @@ export class EditorSurface implements ScreenUiCompositor {
   }
 
   private paste(plain = false): void {
-    const text = this.clipboardGet().replace(/\r\n?/g, "\n");
+    // oxlint-disable-next-line no-control-regex — intentional: strips control chars
+    const text = this.clipboardGet().replace(/\r\n?/g, "\n").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, "");
     if (!text) return;
     this.pending = null;
     this.mutate("paste");

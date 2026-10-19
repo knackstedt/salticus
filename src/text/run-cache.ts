@@ -29,6 +29,10 @@ export interface FaceDef {
   path: string;
   /** Raw font bytes for harfbuzzjs. */
   data: Uint8Array;
+  /** Rasterize at this multiple of the logical size, then box-downscale —
+   *  bitmap fonts (NotoColorEmoji's fixed CBDT strikes) can't rasterize at
+   *  small sizes and return empty bitmaps without it. */
+  rasterScale?: number;
 }
 
 export interface RunShape {
@@ -62,6 +66,7 @@ export class RunCache {
   private baselines = new Map<string, number>();
   private runs = new Map<string, RunShape>();
   private chunks = new Map<string, ChunkBitmap>();
+  private missCache = new Map<string, [number, number][]>();
   private lru = new Map<string, number>();
   private tick = 0;
 
@@ -78,6 +83,113 @@ export class RunCache {
   registerFace(def: FaceDef): void {
     this.faces.set(def.key, def);
     this.shaper.addFace(def.key, def.data);
+  }
+
+  hasFace(key: string): boolean {
+    return this.faces.has(key);
+  }
+
+  /** UTF-16 ranges that shape to .notdef in `face` — used to split emoji
+   *  and other uncovered glyphs into fallback-face runs. Cluster-aligned,
+   *  so ranges never split a surrogate pair or grapheme cluster. */
+  missingRanges(face: string, sizePx: number, text: string): [number, number][] {
+    if (!text || !this.faces.has(face) || !this.ready) return [];
+    // Pure ASCII/Latin-1 is always covered by our bundled faces.
+    if (!/[^\x00-\xff]/.test(text)) return [];
+    const size = Math.max(1, Math.round(sizePx));
+    const ck = `m|${face}@${size}\x00${text}`;
+    const hit = this.missCache.get(ck);
+    if (hit) { this.touch(ck); return hit; }
+    const shaped = this.shaper.shapeGlyphs(face, text, size);
+    const ranges: [number, number][] = [];
+    if (shaped) {
+      // A missing glyph's coverage = [its cluster, the next DISTINCT cluster
+      // value). Multiple glyphs can share a cluster (a ZWJ sequence shaped
+      // to several .notdef glyphs all report the sequence's start), so the
+      // next array entry is NOT a reliable boundary.
+      const distinct: number[] = [];
+      shaped.glyphs.forEach(g => {
+        if (distinct[distinct.length - 1] !== g.cluster) distinct.push(g.cluster);
+      });
+      const nextBoundary = (c: number): number => {
+        for (let i = 0; i < distinct.length; i++) if (distinct[i]! > c) return distinct[i]!;
+        return text.length;
+      };
+      const isLow = (i: number) => i < text.length && text.charCodeAt(i) >= 0xDC00 && text.charCodeAt(i) <= 0xDFFF;
+      const isHigh = (i: number) => i >= 0 && text.charCodeAt(i) >= 0xD800 && text.charCodeAt(i) <= 0xDBFF;
+      shaped.glyphs.forEach(g => {
+        if (g.glyphId !== 0) return;
+        let start = g.cluster;
+        let end = nextBoundary(g.cluster);
+        // Snap boundaries out of surrogate pairs — a range edge between a
+        // high and low surrogate would split the codepoint in two.
+        if (isLow(start) && isHigh(start - 1)) start--;
+        if (isLow(end) && isHigh(end - 1)) end++;
+        const last = ranges[ranges.length - 1];
+        if (last && start <= last[1]) last[1] = Math.max(last[1], end);
+        else ranges.push([start, Math.max(end, start + 1)]);
+      });
+      // Merge ranges separated only by emoji glue — variation selectors
+      // (FE00-FE0F), keycap/combining marks (20D0-20FF), tag chars
+      // (E0020-E007F). These must travel WITH the emoji (❤+VS16 → emoji
+      // heart). ZWJ deliberately excluded — the rasterizer can't ligate
+      // ZWJ sequences, and 👨ZWJ👩 renders better as separate silhouettes
+      // than as the fallback font's .notdef box.
+      const glue = (cp: number) =>
+        (cp >= 0xFE00 && cp <= 0xFE0F) || (cp >= 0x20D0 && cp <= 0x20FF) ||
+        (cp >= 0xE0020 && cp <= 0xE007F);
+      for (let i = ranges.length - 1; i > 0; i--) {
+        const prev = ranges[i - 1]!, cur = ranges[i]!;
+        let joinable = cur[0] - prev[1] <= 4;
+        for (let j = prev[1]; joinable && j < cur[0]; j++) {
+          if (!glue(text.codePointAt(j)!)) joinable = false;
+        }
+        if (joinable) { prev[1] = cur[1]; ranges.splice(i, 1); }
+      }
+    }
+    this.missCache.set(ck, ranges);
+    this.touch(ck);
+    return ranges;
+  }
+
+  /** Split `text` into ordered pieces tagged with the face that covers them:
+   *  `face` where possible, otherwise the first face in `chain` that shapes
+   *  without .notdef (last chain face takes whatever remains). ZWJ chars are
+   *  emitted as their own primary-face pieces — fallback faces can't ligate
+   *  ZWJ sequences, so pieces split there anyway. `start` is the piece's
+   *  UTF-16 offset within `text`. */
+  fallbackPieces(face: string, sizePx: number, text: string, chain: string[]): { face: string; text: string; start: number }[] {
+    const out: { face: string; text: string; start: number }[] = [];
+    const resolve = (piece: string, start: number, fi: number) => {
+      const fk = chain[fi]!;
+      const miss = fi === chain.length - 1 ? [] : this.missingRanges(fk, sizePx, piece);
+      if (!miss.length) { out.push({ face: fk, text: piece, start }); return; }
+      let cur = 0;
+      miss.forEach(([a, b]) => {
+        if (a > cur) out.push({ face: fk, text: piece.slice(cur, a), start: start + cur });
+        resolve(piece.slice(a, b), start + a, fi + 1);
+        cur = b;
+      });
+      if (cur < piece.length) out.push({ face: fk, text: piece.slice(cur), start: start + cur });
+    };
+    const missing = chain.length ? this.missingRanges(face, sizePx, text) : [];
+    let cursor = 0;
+    missing.forEach(([ms, me]) => {
+      if (ms > cursor) out.push({ face, text: text.slice(cursor, ms), start: cursor });
+      let segStart = ms;
+      for (let j = ms; j < me; j++) {
+        if (text.charCodeAt(j) !== 0x200D) continue;
+        if (j > segStart) resolve(text.slice(segStart, j), segStart, 0);
+        out.push({ face, text: text.slice(j, j + 1), start: j });
+        segStart = j + 1;
+      }
+      if (segStart < me) resolve(text.slice(segStart, me), segStart, 0);
+      cursor = me;
+    });
+    if (cursor < text.length || out.length === 0) {
+      out.push({ face, text: text.slice(cursor), start: cursor });
+    }
+    return out;
   }
 
   private ftHandle(key: string): bigint {
@@ -164,7 +276,9 @@ export class RunCache {
     if (!this.ready) return null;
 
     const baseline = this.calibrate(face, size);
-    const bmp = this.ft.render(this.ftHandle(face), text, size);
+    const rs = this.faces.get(face)!.rasterScale ?? 1;
+    let bmp = this.ft.render(this.ftHandle(face), text, size * rs);
+    if (bmp && rs > 1) bmp = downscaleBitmap(bmp, rs);
     if (!bmp || bmp.width === 0 || bmp.height === 0) {
       const empty: ChunkBitmap = { region: null, inkX: 0, w: 0, h: 0, baselineInBitmap: baseline };
       this.chunks.set(ck, empty);
@@ -204,6 +318,7 @@ export class RunCache {
       const k = entries[i]![0];
       this.runs.delete(k);
       this.chunks.delete(k);
+      this.missCache.delete(k);
       this.lru.delete(k);
     }
   }
@@ -215,11 +330,35 @@ export class RunCache {
   dispose(): void {
     this.runs.clear();
     this.chunks.clear();
+    this.missCache.clear();
     this.baselines.clear();
     this.lru.clear();
     this.ft.dispose();
     this.shaper.dispose();
   }
+}
+
+/** Box-filter downscale of a premultiplied coverage RGBA bitmap. */
+function downscaleBitmap(bmp: { data: Uint8Array; width: number; height: number }, factor: number): { data: Uint8Array; width: number; height: number } {
+  const w = Math.floor(bmp.width / factor);
+  const h = Math.floor(bmp.height / factor);
+  if (w <= 0 || h <= 0) return bmp;
+  const out = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let r = 0, g = 0, b = 0, a = 0;
+      for (let dy = 0; dy < factor; dy++) {
+        for (let dx = 0; dx < factor; dx++) {
+          const i = ((y * factor + dy) * bmp.width + (x * factor + dx)) * 4;
+          r += bmp.data[i]!; g += bmp.data[i + 1]!; b += bmp.data[i + 2]!; a += bmp.data[i + 3]!;
+        }
+      }
+      const n = factor * factor;
+      const o = (y * w + x) * 4;
+      out[o] = r / n; out[o + 1] = g / n; out[o + 2] = b / n; out[o + 3] = a / n;
+    }
+  }
+  return { data: out, width: w, height: h };
 }
 
 function monotonicOffsets(len: number): Float32Array {
