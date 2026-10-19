@@ -135,7 +135,8 @@ export class DocLayouter {
           for (; j < t.length && isSpace(t[j]!) === space && t[j] !== "\n"; j++) {}
           tokens.push({
             spanIdx: si, start: i, end: j, blockOff: r.blockOff + i,
-            width: r.shape.clusterOffsets[j]! - r.shape.clusterOffsets[i]!, space,
+            // RTL runs have descending cluster offsets — width is the delta.
+            width: Math.abs(r.shape.clusterOffsets[j]! - r.shape.clusterOffsets[i]!), space,
           });
           i = j;
         }
@@ -195,12 +196,12 @@ export class DocLayouter {
               const r = runs[tok.spanIdx]!;
               let ej = si;
               for (; ej < tok.end;) {
-                const wNext = r.shape!.clusterOffsets[ej + 1]! - r.shape!.clusterOffsets[si]!;
+                const wNext = Math.abs(r.shape!.clusterOffsets[ej + 1]! - r.shape!.clusterOffsets[si]!);
                 if (x + wNext > indent + avail) break;
                 ej++;
               }
               if (ej === si) ej = si + 1; // always make progress
-              const w = r.shape!.clusterOffsets[ej]! - r.shape!.clusterOffsets[si]!;
+              const w = Math.abs(r.shape!.clusterOffsets[ej]! - r.shape!.clusterOffsets[si]!);
               push(tok, si, ej, w, tok.blockOff + (si - tok.start));
               si = ej;
               if (si < tok.end) flush(tok.blockOff + (si - tok.start));
@@ -340,7 +341,7 @@ export class DocLayouter {
       const s = line.segments[si]!;
       if (pos.offset < s.blockOffset || pos.offset > s.blockOffset + (s.end - s.start)) continue;
       const inner = Math.max(s.start, Math.min(s.end, pos.offset - s.blockOffset + s.start));
-      const lo = s.run.clusterOffsets[s.start] ?? 0;
+      const lo = Math.min(s.run.clusterOffsets[s.start] ?? 0, s.run.clusterOffsets[s.end] ?? 0);
       const at = s.run.clusterOffsets[inner] ?? lo;
       return s.x + (at - lo);
     }
@@ -350,7 +351,7 @@ export class DocLayouter {
     if (first && pos.offset <= first.blockOffset) return first.x;
     const last = line.segments[line.segments.length - 1];
     if (last) {
-      return last.x + ((last.run.clusterOffsets[last.end] ?? 0) - (last.run.clusterOffsets[last.start] ?? 0));
+      return last.x + Math.abs((last.run.clusterOffsets[last.end] ?? 0) - (last.run.clusterOffsets[last.start] ?? 0));
     }
     return line.indent;
   }
@@ -371,12 +372,14 @@ export class DocLayouter {
     if (segs.length === 0) return { block: line.block, offset: line.blockStart };
     for (let si = 0; si < segs.length; si++) {
       const s = segs[si]!;
-      const segEnd = s.x + ((s.run.clusterOffsets[s.end] ?? 0) - (s.run.clusterOffsets[s.start] ?? 0));
+      const sLo = Math.min(s.run.clusterOffsets[s.start] ?? 0, s.run.clusterOffsets[s.end] ?? 0);
+      const sHi = Math.max(s.run.clusterOffsets[s.start] ?? 0, s.run.clusterOffsets[s.end] ?? 0);
+      const segEnd = s.x + (sHi - sLo);
       if (px <= segEnd || s === segs[segs.length - 1]) {
         let best = s.start;
         let bestDist = Infinity;
         for (let i = s.start; i <= s.end; i++) {
-          const x = s.x + ((s.run.clusterOffsets[i] ?? 0) - (s.run.clusterOffsets[s.start] ?? 0));
+          const x = s.x + ((s.run.clusterOffsets[i] ?? 0) - sLo);
           const d = Math.abs(px - x);
           if (d < bestDist) { bestDist = d; best = i; }
         }
@@ -395,8 +398,9 @@ export class DocLayouter {
     let best = segs[0]!.blockOffset;
     let bestDist = Infinity;
     segs.forEach(s => {
+      const sLo = Math.min(s.run.clusterOffsets[s.start] ?? 0, s.run.clusterOffsets[s.end] ?? 0);
       for (let i = s.start; i <= s.end; i++) {
-        const x = s.x + ((s.run.clusterOffsets[i] ?? 0) - (s.run.clusterOffsets[s.start] ?? 0));
+        const x = s.x + ((s.run.clusterOffsets[i] ?? 0) - sLo);
         const d = Math.abs(goalX - x);
         if (d < bestDist) { bestDist = d; best = s.blockOffset + (i - s.start); }
       }

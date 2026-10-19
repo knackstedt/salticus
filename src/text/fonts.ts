@@ -67,6 +67,107 @@ export const FALLBACK_FACES: { key: string; candidates: string[] }[] = [
     ],
   },
   {
+    // RTL/abjad scripts — shaped per-run by harfbuzz, so a contiguous missing
+    // range stays in one face and contextual joining survives.
+    key: "noto-hebrew:400:normal",
+    candidates: [
+      "/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf",
+      "/usr/share/fonts/truetype/noto/NotoRashiHebrew-Regular.ttf",
+    ],
+  },
+  {
+    key: "noto-naskh:400:normal",
+    candidates: ["/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf"],
+  },
+  {
+    key: "noto-thai:400:normal",
+    candidates: ["/usr/share/fonts/truetype/noto/NotoSansThai-Regular.ttf"],
+  },
+  {
+    key: "noto-lao:400:normal",
+    candidates: ["/usr/share/fonts/truetype/noto/NotoSansLao-Regular.ttf"],
+  },
+  {
+    // Kaomoji brackets (༼ ༽) and friends.
+    key: "noto-tibetan:400:normal",
+    candidates: ["/usr/share/fonts/truetype/noto/NotoSerifTibetan-Regular.ttf"],
+  },
+  {
+    // Indic + major world scripts. One face per script — small files, and
+    // harfbuzz picks per-run so contextual shaping is preserved.
+    key: "noto-devanagari:400:normal",
+    candidates: ["/usr/share/fonts/truetype/noto/NotoSansDevanagari-Regular.ttf"],
+  },
+  {
+    key: "noto-bengali:400:normal",
+    candidates: ["/usr/share/fonts/truetype/noto/NotoSansBengali-Regular.ttf"],
+  },
+  {
+    key: "noto-tamil:400:normal",
+    candidates: ["/usr/share/fonts/truetype/noto/NotoSansTamil-Regular.ttf"],
+  },
+  {
+    key: "noto-telugu:400:normal",
+    candidates: ["/usr/share/fonts/truetype/noto/NotoSansTelugu-Regular.ttf"],
+  },
+  {
+    key: "noto-kannada:400:normal",
+    candidates: ["/usr/share/fonts/truetype/noto/NotoSansKannada-Regular.ttf"],
+  },
+  {
+    key: "noto-malayalam:400:normal",
+    candidates: ["/usr/share/fonts/truetype/noto/NotoSansMalayalam-Regular.ttf"],
+  },
+  {
+    key: "noto-gujarati:400:normal",
+    candidates: ["/usr/share/fonts/truetype/noto/NotoSansGujarati-Regular.ttf"],
+  },
+  {
+    key: "noto-gurmukhi:400:normal",
+    candidates: ["/usr/share/fonts/truetype/noto/NotoSansGurmukhi-Regular.ttf"],
+  },
+  {
+    key: "noto-sinhala:400:normal",
+    candidates: ["/usr/share/fonts/truetype/noto/NotoSansSinhala-Regular.ttf"],
+  },
+  {
+    key: "noto-khmer:400:normal",
+    candidates: ["/usr/share/fonts/truetype/noto/NotoSansKhmer-Regular.ttf"],
+  },
+  {
+    key: "noto-myanmar:400:normal",
+    candidates: ["/usr/share/fonts/truetype/noto/NotoSansMyanmar-Regular.ttf"],
+  },
+  {
+    key: "noto-armenian:400:normal",
+    candidates: ["/usr/share/fonts/truetype/noto/NotoSansArmenian-Regular.ttf"],
+  },
+  {
+    key: "noto-georgian:400:normal",
+    candidates: ["/usr/share/fonts/truetype/noto/NotoSansGeorgian-Regular.ttf"],
+  },
+  {
+    key: "noto-ethiopic:400:normal",
+    candidates: ["/usr/share/fonts/truetype/noto/NotoSansEthiopic-Regular.ttf"],
+  },
+  {
+    // Historic/European minority scripts that show up in torture tests.
+    key: "noto-ogham:400:normal",
+    candidates: ["/usr/share/fonts/truetype/noto/NotoSansOgham-Regular.ttf"],
+  },
+  {
+    key: "noto-runic:400:normal",
+    candidates: ["/usr/share/fonts/truetype/noto/NotoSansRunic-Regular.ttf"],
+  },
+  {
+    key: "noto-cherokee:400:normal",
+    candidates: ["/usr/share/fonts/truetype/noto/NotoSansCherokee-Regular.ttf"],
+  },
+  {
+    key: "noto-canadian:400:normal",
+    candidates: ["/usr/share/fonts/truetype/noto/NotoSansCanadianAboriginal-Regular.ttf"],
+  },
+  {
     // Math operators and alphanumeric symbols.
     key: "noto-math:400:normal",
     candidates: ["/usr/share/fonts/truetype/noto/NotoSansMath-Regular.ttf"],
@@ -84,6 +185,11 @@ export const FALLBACK_FACES: { key: string; candidates: string[] }[] = [
       "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
       "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
     ],
+  },
+  {
+    // Android's catch-all: CJK Ext-B+, Deseret, and other historic scripts.
+    key: "droid-fallback:400:normal",
+    candidates: ["/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf"],
   },
   {
     key: EMOJI_FACE,

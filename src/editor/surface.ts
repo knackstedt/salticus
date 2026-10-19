@@ -211,6 +211,17 @@ export class EditorSurface implements ScreenUiCompositor {
     return this.cache;
   }
 
+  /** Flat segment dump for MCP debugging: line index, x, face, drawn text. */
+  layoutDebug(): { line: number; x: number; face: string; text: string }[] {
+    const out: { line: number; x: number; face: string; text: string }[] = [];
+    this.layout.lines.forEach((line, li) => {
+      line.segments.forEach(seg => {
+        out.push({ line: li, x: seg.x, face: seg.faceKey, text: seg.runText.slice(seg.start, seg.end) });
+      });
+    });
+    return out;
+  }
+
   get hasFocus(): boolean {
     return this.focused;
   }
@@ -1936,7 +1947,7 @@ export class EditorSurface implements ScreenUiCompositor {
       if (this.doc.blocks[line.block]!.kind === "codeblock") continue;
       for (const seg of line.segments) {
         if (!seg.style.code) continue;
-        const segW = (seg.run.clusterOffsets[seg.end] ?? 0) - (seg.run.clusterOffsets[seg.start] ?? 0);
+        const segW = Math.abs((seg.run.clusterOffsets[seg.end] ?? 0) - (seg.run.clusterOffsets[seg.start] ?? 0));
         p.roundedRect(ox + seg.x - 4, ly + line.height * 0.1, segW + 8, line.height * 0.8, 5, t.codeBg);
       }
     }
@@ -2005,7 +2016,7 @@ export class EditorSurface implements ScreenUiCompositor {
     if (block.kind === "todo" && block.checked) color = [color[0], color[1], color[2], color[3] * 0.55];
     const baselineY = oy + line.baseline;
     const co = seg.run.clusterOffsets;
-    const segW = (co[seg.end] ?? 0) - (co[seg.start] ?? 0);
+    const segW = Math.abs((co[seg.end] ?? 0) - (co[seg.start] ?? 0));
 
     const chunk = this.cache.getChunk(seg.faceKey, seg.sizePx, text);
     if (chunk?.region) {
@@ -2013,7 +2024,7 @@ export class EditorSurface implements ScreenUiCompositor {
       // sharpest when it lands on integer device pixels.
       const imgX = Math.round(ox + seg.x + chunk.inkX);
       const imgY = Math.round(baselineY - chunk.baselineInBitmap);
-      p.text(imgX, imgY, chunk.w, chunk.h, { region: chunk.region, atlasSize: this.atlas.size }, color);
+      p.text(imgX, imgY, chunk.w, chunk.h, { region: chunk.region, atlasSize: this.atlas.size, color: chunk.color }, color);
     }
 
     const penX = ox + seg.x;

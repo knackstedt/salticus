@@ -16,6 +16,7 @@ export const KIND_RECT = 1;
 export const KIND_ROUNDED = 2;
 export const KIND_CAPSULE = 3;
 export const KIND_ELLIPSE = 4;
+export const KIND_COLOR = 5;
 
 const FLOATS_PER_INSTANCE = 20; // 5 × vec4f
 const INITIAL_CAPACITY = 2048;
@@ -25,6 +26,9 @@ export type Rgba = [number, number, number, number];
 export interface RunQuadSrc {
   region: AtlasRegion;
   atlasSize: number;
+  /** True when the atlas region carries real color (CBDT emoji) — samples
+   *  RGBA instead of tinting alpha coverage. */
+  color?: boolean;
 }
 
 export class GpuTextPass {
@@ -127,7 +131,7 @@ export class GpuTextPass {
     const s = src.atlasSize;
     this.quad([x, y, w, h],
       [src.region.u / s, src.region.v / s, (src.region.u + src.region.w) / s, (src.region.v + src.region.h) / s],
-      color, [KIND_TEXT, 0, 0, 0]);
+      color, [src.color ? KIND_COLOR : KIND_TEXT, 0, 0, 0]);
   }
 
   /** Solid rectangle — selections, carets, rules, underlines. */

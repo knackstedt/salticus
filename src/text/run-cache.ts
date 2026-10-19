@@ -18,6 +18,8 @@
 import { FtRasterizer } from "./ft";
 import { TextShaper } from "./shaper";
 import { TextAtlas, type AtlasRegion } from "./atlas";
+import { CbdtFont } from "./cbdt";
+import { ImageDecoder } from "./image-decode";
 import { createLogger } from "@downdraft/engine/util/logger";
 
 const log = createLogger();
@@ -48,19 +50,27 @@ export interface RunShape {
 }
 
 export interface ChunkBitmap {
-  /** Atlas region (null for blank text — advance only). */
+  /** Atlas region (null for blank text — advance only). Region dims are the
+   *  native bitmap size; `w`/`h` are the LOGICAL draw size — for color
+   *  bitmap strikes the region is upscaled and the GPU stretch is free AA. */
   region: AtlasRegion | null;
   /** Left ink edge in pen space — draw at penX + inkX (overhangs go <0). */
   inkX: number;
-  /** Bitmap dims in px. */
+  /** Draw dims in px. */
   w: number;
   h: number;
   baselineInBitmap: number;
+  /** True when the bitmap carries real colors (CBDT emoji) — draw with the
+   *  self-colored quad kind instead of the tinted coverage kind. */
+  color?: boolean;
 }
 
 export class RunCache {
   private ft = new FtRasterizer();
   private shaper = new TextShaper();
+  private imgDec = new ImageDecoder();
+  private cbdtFaces = new Map<string, CbdtFont | null>();
+  private cbdtGlyphs = new Map<string, { data: Uint8Array; width: number; height: number } | null>();
   private faces = new Map<string, FaceDef>();
   private handles = new Map<string, bigint>();
   private baselines = new Map<string, number>();
@@ -103,17 +113,23 @@ export class RunCache {
     const shaped = this.shaper.shapeGlyphs(face, text, size);
     const ranges: [number, number][] = [];
     if (shaped) {
-      // A missing glyph's coverage = [its cluster, the next DISTINCT cluster
-      // value). Multiple glyphs can share a cluster (a ZWJ sequence shaped
-      // to several .notdef glyphs all report the sequence's start), so the
-      // next array entry is NOT a reliable boundary.
+      // A missing glyph's coverage = [its cluster, the SMALLEST distinct
+      // cluster value above it). Multiple glyphs can share a cluster (a ZWJ
+      // sequence shaped to several .notdef glyphs all report the sequence's
+      // start), so the next array entry is NOT a reliable boundary. For RTL
+      // runs glyph order is visual and clusters descend — a scan for the
+      // smallest value > c is correct for both directions.
       const distinct: number[] = [];
       shaped.glyphs.forEach(g => {
         if (distinct[distinct.length - 1] !== g.cluster) distinct.push(g.cluster);
       });
       const nextBoundary = (c: number): number => {
-        for (let i = 0; i < distinct.length; i++) if (distinct[i]! > c) return distinct[i]!;
-        return text.length;
+        let best = text.length;
+        for (let i = 0; i < distinct.length; i++) {
+          const v = distinct[i]!;
+          if (v > c && v < best) best = v;
+        }
+        return best;
       };
       const isLow = (i: number) => i < text.length && text.charCodeAt(i) >= 0xDC00 && text.charCodeAt(i) <= 0xDFFF;
       const isHigh = (i: number) => i >= 0 && text.charCodeAt(i) >= 0xD800 && text.charCodeAt(i) <= 0xDBFF;
@@ -125,10 +141,15 @@ export class RunCache {
         // high and low surrogate would split the codepoint in two.
         if (isLow(start) && isHigh(start - 1)) start--;
         if (isLow(end) && isHigh(end - 1)) end++;
-        const last = ranges[ranges.length - 1];
-        if (last && start <= last[1]) last[1] = Math.max(last[1], end);
-        else ranges.push([start, Math.max(end, start + 1)]);
+        ranges.push([start, Math.max(end, start + 1)]);
       });
+      // Ranges arrive in GLYPH order — descending for RTL runs — so sort
+      // before merging overlaps.
+      ranges.sort((a, b) => a[0] - b[0]);
+      for (let i = ranges.length - 1; i > 0; i--) {
+        const prev = ranges[i - 1]!, cur = ranges[i]!;
+        if (cur[0] <= prev[1]) { prev[1] = Math.max(prev[1], cur[1]); ranges.splice(i, 1); }
+      }
       // Merge ranges separated only by emoji glue — variation selectors
       // (FE00-FE0F), keycap/combining marks (20D0-20FF), tag chars
       // (E0020-E007F). These must travel WITH the emoji (❤+VS16 → emoji
@@ -162,12 +183,16 @@ export class RunCache {
     const out: { face: string; text: string; start: number }[] = [];
     const resolve = (piece: string, start: number, fi: number) => {
       const fk = chain[fi]!;
-      const miss = fi === chain.length - 1 ? [] : this.missingRanges(fk, sizePx, piece);
+      const miss = this.missingRanges(fk, sizePx, piece);
       if (!miss.length) { out.push({ face: fk, text: piece, start }); return; }
+      const last = fi === chain.length - 1;
       let cur = 0;
       miss.forEach(([a, b]) => {
         if (a > cur) out.push({ face: fk, text: piece.slice(cur, a), start: start + cur });
-        resolve(piece.slice(a, b), start + a, fi + 1);
+        if (!last) resolve(piece.slice(a, b), start + a, fi + 1);
+        // Nothing in the chain covers this slice — let the PRIMARY face draw
+        // its .notdef box rather than a blank in some fallback face.
+        else out.push({ face, text: piece.slice(a, b), start: start + a });
         cur = b;
       });
       if (cur < piece.length) out.push({ face: fk, text: piece.slice(cur), start: start + cur });
@@ -277,8 +302,22 @@ export class RunCache {
 
     const baseline = this.calibrate(face, size);
     const rs = this.faces.get(face)!.rasterScale ?? 1;
-    let bmp = this.ft.render(this.ftHandle(face), text, size * rs);
-    if (bmp && rs > 1) bmp = downscaleBitmap(bmp, rs);
+    // CBDT color strike — compose embedded PNGs at native strike resolution;
+    // the GPU stretch down to logical draw size is the antialiasing.
+    const cbdt = this.cbdtFor(face);
+    const colorBmp = cbdt ? this.renderCbdt(cbdt, face, size, text) : null;
+    let bmp = colorBmp?.bmp ?? null;
+    let color = !!colorBmp;
+    let drawW = colorBmp?.drawW ?? 0;
+    let drawH = colorBmp?.drawH ?? 0;
+    let baselineInBitmap = colorBmp?.baselineInBitmap ?? baseline;
+    if (!bmp) {
+      color = false;
+      bmp = this.ft.render(this.ftHandle(face), text, size * rs);
+      if (bmp && rs > 1) bmp = downscaleBitmap(bmp, rs);
+      if (bmp) { drawW = bmp.width; drawH = bmp.height; }
+      baselineInBitmap = baseline;
+    }
     if (!bmp || bmp.width === 0 || bmp.height === 0) {
       const empty: ChunkBitmap = { region: null, inkX: 0, w: 0, h: 0, baselineInBitmap: baseline };
       this.chunks.set(ck, empty);
@@ -297,15 +336,84 @@ export class RunCache {
     this.atlas.upload(region, bmp.data);
     const chunk: ChunkBitmap = {
       region,
-      inkX: inkMinX(this.shaper, face, size, text),
-      w: bmp.width,
-      h: bmp.height,
-      baselineInBitmap: baseline,
+      inkX: color ? 0 : inkMinX(this.shaper, face, size, text),
+      w: drawW,
+      h: drawH,
+      baselineInBitmap,
+      color,
     };
     this.chunks.set(ck, chunk);
     this.touch(ck);
     this.evictIfNeeded();
     return chunk;
+  }
+
+  /** Parsed CBDT tables for `face` — null when the font has no color bitmap
+   *  strike. */
+  private cbdtFor(face: string): CbdtFont | null {
+    if (!this.cbdtFaces.has(face)) {
+      const def = this.faces.get(face);
+      this.cbdtFaces.set(face, def ? CbdtFont.parse(def.data) : null);
+    }
+    return this.cbdtFaces.get(face) ?? null;
+  }
+
+  /** Decoded PNG pixels for one CBDT glyph — decoded strikes are size-
+   *  independent, so they're cached per (face, gid) outside the chunk cache. */
+  private cbdtGlyphImage(face: string, gid: number, png: Uint8Array): { data: Uint8Array; width: number; height: number } | null {
+    const key = `${face}#${gid}`;
+    if (this.cbdtGlyphs.has(key)) return this.cbdtGlyphs.get(key)!;
+    if (this.cbdtGlyphs.size > 512) this.cbdtGlyphs.clear();
+    const img = this.imgDec.available ? this.imgDec.decode(png) : null;
+    this.cbdtGlyphs.set(key, img);
+    return img;
+  }
+
+  /** Compose a color-bitmap strike for `text` at NATIVE strike resolution.
+   *  Returns null when any glyph lacks a CBDT record — the caller then falls
+   *  back to the coverage raster (silhouette) so nothing goes missing. */
+  private renderCbdt(cbdt: CbdtFont, face: string, size: number, text: string)
+    : { bmp: { data: Uint8Array; width: number; height: number }; drawW: number; drawH: number; baselineInBitmap: number } | null {
+    const shaped = this.shaper.shapeGlyphs(face, text, size);
+    if (!shaped || shaped.glyphs.length === 0) return null;
+    const m = this.shaper.metrics(face, size);
+    const lineH = Math.ceil(size * 1.2);
+    const s = cbdt.ppem / size; // logical px → strike px
+    const canvasW = Math.min(4096, Math.max(1, Math.ceil(shaped.advance * s) + 8));
+    const canvasH = Math.max(1, Math.ceil(lineH * s));
+    if (canvasW <= 0 || shaped.advance * s > canvasW) return null;
+    const out = new Uint8Array(canvasW * canvasH * 4);
+    const baselineNat = Math.round(m.ascent * s);
+    let drew = 0;
+    shaped.glyphs.forEach(g => {
+      const rec = cbdt.glyph(g.glyphId);
+      if (!rec) return;
+      const img = this.cbdtGlyphImage(face, g.glyphId, rec.png);
+      if (!img) return;
+      const dx = Math.round(g.penX * s + rec.bearingX);
+      const dy = baselineNat - rec.bearingY;
+      for (let y = 0; y < img.height; y++) {
+        const py = dy + y;
+        if (py < 0 || py >= canvasH) continue;
+        for (let x = 0; x < img.width; x++) {
+          const px = dx + x;
+          if (px < 0 || px >= canvasW) continue;
+          const si = (y * img.width + x) * 4;
+          const di = (py * canvasW + px) * 4;
+          out[di] = img.data[si]!; out[di + 1] = img.data[si + 1]!;
+          out[di + 2] = img.data[si + 2]!; out[di + 3] = img.data[si + 3]!;
+        }
+      }
+      drew++;
+    });
+    // Missing glyphs just don't paint — their advance still lands correctly.
+    if (!drew) return null;
+    return {
+      bmp: { data: out, width: canvasW, height: canvasH },
+      drawW: shaped.advance,
+      drawH: lineH,
+      baselineInBitmap: m.ascent,
+    };
   }
 
   /** Cap cache growth — drop least-recently-used entries. */

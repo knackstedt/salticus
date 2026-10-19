@@ -301,7 +301,7 @@ export class WbPainter {
     const chunk = this.cache.getChunk(face, sizePx, str);
     if (chunk?.region) {
       this.pass.text(Math.round(penX + chunk.inkX), Math.round(y), chunk.w, chunk.h,
-        { region: chunk.region, atlasSize: this.atlas.size }, color);
+        { region: chunk.region, atlasSize: this.atlas.size, color: chunk.color }, color);
     }
     return this.cache.getRun(face, sizePx, str)?.advance ?? 0;
   }

@@ -43,6 +43,17 @@ interface FontEntry {
   font: HbFont;
 }
 
+/** Smallest distinct cluster value strictly greater than `c` in the glyph
+ *  stream — the upper boundary of `c`'s coverage in UTF-16 space. */
+function distinctAbove(infos: { cluster: number }[], fallback: number, c: number): number {
+  let hi = fallback;
+  for (let i = 0; i < infos.length; i++) {
+    const v = infos[i]!.cluster;
+    if (v > c && v < hi) hi = v;
+  }
+  return hi;
+}
+
 export class TextShaper {
   private fonts = new Map<string, FontEntry>();
   private hbBuffer: HbBuffer | null = null;
@@ -142,11 +153,16 @@ export class TextShaper {
     const glyphs: { glyphId: number; penX: number; penY: number; cluster: number }[] = [];
     const offsets = withClusters ? new Float32Array(text.length + 1) : null;
 
+    // Direction of the whole buffer (bidi is a segment property, not per-
+    // glyph): RTL runs emit glyphs in visual order with DESCENDING clusters.
+    const rtl = infos.length > 1 && infos[0]!.cluster > infos[infos.length - 1]!.cluster;
+
     let penX = 0;
     let penY = 0;
     let nextBoundary = 0;
     for (let i = 0; i < infos.length; i++) {
       const cluster = Math.max(0, Math.min(text.length, infos[i]!.cluster));
+      const adv = positions[i]!.xAdvance;
       glyphs.push({
         glyphId: infos[i]!.codepoint,
         penX: penX + positions[i]!.xOffset,
@@ -154,18 +170,27 @@ export class TextShaper {
         cluster,
       });
       if (offsets) {
+        // This glyph covers UTF-16 boundaries [cluster, hi] where hi is the
+        // adjacent cluster value — the NEXT glyph's for LTR, the PREVIOUS
+        // visual glyph's for RTL. Boundary j maps linearly between the
+        // glyph's two visual edges (left for LTR, right for RTL at cluster).
         const nextCluster = i + 1 < infos.length
           ? Math.max(0, Math.min(text.length, infos[i + 1]!.cluster))
           : text.length;
-        for (let j = Math.max(nextBoundary, cluster); j <= nextCluster; j++) {
-          offsets[j] = penX;
+        const hi = rtl ? distinctAbove(infos, text.length, cluster) : nextCluster;
+        const lo = rtl ? cluster : Math.max(cluster, nextBoundary);
+        if (hi > lo) {
+          for (let j = lo; j <= hi; j++) {
+            const t = (j - lo) / (hi - lo);
+            offsets[j] = rtl ? penX + adv * (1 - t) : penX;
+          }
         }
-        nextBoundary = nextCluster;
+        nextBoundary = Math.max(nextBoundary, cluster + 1);
       }
-      penX += positions[i]!.xAdvance;
+      penX += adv;
       penY += positions[i]!.yAdvance;
     }
-    if (offsets) {
+    if (offsets && !rtl) {
       for (let j = nextBoundary; j <= text.length; j++) offsets[j] = penX;
     }
     return { glyphs, advance: penX, clusterOffsets: offsets, glyphCount: infos.length };

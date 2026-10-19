@@ -105,6 +105,14 @@ fn fs(in : VsOut) -> @location(0) vec4f {
     return vec4f(d.color.rgb * a, a);
   }
 
+  if (kind == 5) {
+    // Self-colored bitmap (CBDT emoji) — premultiply straight-alpha texels;
+    // d.color.a still applies so selection/todo dimming fades the glyph.
+    let t = textureSample(atlasTex, atlasSamp, in.uv);
+    let a = t.a * d.color.a;
+    return vec4f(t.rgb * a, a);
+  }
+
   if (kind == 2) {
     let half = d.dst.zw * 0.5;
     let sdf = sdRoundBox(in.local - half, half, d.aux.y);

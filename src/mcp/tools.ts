@@ -9,6 +9,7 @@ import { jsonResult, type McpToolRegistration } from "@downdraft/engine/app/main
 import { store } from "../app/store";
 import { createPage, deletePage, destroyPage, openPage, renamePage } from "../app/actions";
 import { editorSurface, wbSurface } from "../game-module";
+import { FALLBACK_FACES } from "../text/fonts";
 
 export function gameMcpTools(_ctx: GameContext): McpToolRegistration[] {
   return [
@@ -48,6 +49,7 @@ export function gameMcpTools(_ctx: GameContext): McpToolRegistration[] {
             spans: b.spans.map((s) => ({ t: s.text, w: s.style.weight, i: s.style.italic, u: s.style.underline, s: s.style.strikethrough, c: s.style.code })),
           })),
           cache: surf.runCache.stats,
+          segs: surf.layoutDebug().map(s => ({ line: s.line, x: Math.round(s.x), face: s.face, text: s.text })),
         });
       },
     },
@@ -106,10 +108,15 @@ export function gameMcpTools(_ctx: GameContext): McpToolRegistration[] {
         const face = String(p.face), size = Number(p.size), text = String(p.text);
         const ch = surf.runCache.getChunk(face, size, text);
         const run = surf.runCache.getRun(face, size, text);
+        const chain = FALLBACK_FACES.map(f => f.key).filter(k => surf.runCache.hasFace(k));
         return jsonResult({
           ok: true,
           chunk: ch ? { w: ch.w, h: ch.h, region: !!ch.region, inkX: ch.inkX, bib: ch.baselineInBitmap } : null,
           run: run ? { advance: run.advance, ascent: run.ascent, descent: run.descent } : null,
+          faces: chain,
+          pieces: surf.runCache.fallbackPieces(face, size, text, chain),
+          missing: surf.runCache.missingRanges(face, size, text),
+          offsets: run ? Array.from(run.clusterOffsets) : null,
         });
       },
     },
