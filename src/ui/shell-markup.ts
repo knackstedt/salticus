@@ -5,7 +5,6 @@
 // ============================================================================
 
 import { type AppState, type PageMeta } from "../app/store";
-import { hasThumb, thumbUrl } from "../app/thumbnails";
 import { icon } from "./icons";
 
 function esc(s: string): string {
@@ -25,33 +24,31 @@ function treeItems(s: AppState, parentId: string | null, depth: number): string 
   for (const id of ids) {
     const p = s.pages[id];
     if (!p || p.deleted) continue;
-    out += pageItem(s, p, depth);
+    out += pageItem(s, p, depth, true);
     if (p.children.length > 0 && p.expanded) out += treeItems(s, id, depth + 1);
   }
   return out;
 }
 
-function pageItem(s: AppState, p: PageMeta, depth: number): string {
+function pageItem(s: AppState, p: PageMeta, depth: number, inTree = false): string {
   const active = s.activePageId === p.id ? ` data-active="true"` : "";
   const pad = 4 + depth * 14;
   const hasKids = p.children.some((c) => s.pages[c] && !s.pages[c]!.deleted);
   const twist = hasKids
     ? `<span class="tw" data-action="toggle-expand" data-id="${esc(p.id)}">${icon(p.expanded ? "chevronDown" : "chevron", 11)}</span>`
     : `<span class="tw"></span>`;
-  const add = `<span class="fav add" data-action="new-subpage" data-id="${esc(p.id)}" title="New sub-page">${icon("plus", 11)}</span>`;
-  const fav = `<span class="fav${p.favorite ? " on" : ""}" data-action="fav-page" data-id="${esc(p.id)}">${icon("star", 11)}</span>`;
-  const pop = hasThumb(p.id) ? `
-    <div class="thumb-pop">
-      <img src="${thumbUrl(p.id)}" class="thumb-img"/>
-      <div class="tt">${esc(p.title) || "Untitled"}</div>
-    </div>` : "";
+  const renaming = inTree && s.renamingId === p.id;
+  const add = renaming ? "" : `<span class="fav add" data-action="new-subpage" data-id="${esc(p.id)}" title="New sub-page">${icon("plus", 11)}</span>`;
+  const fav = renaming ? "" : `<span class="fav${p.favorite ? " on" : ""}" data-action="fav-page" data-id="${esc(p.id)}">${icon("star", 11)}</span>`;
+  const label = renaming
+    ? `<input class="gn-input" data-rename-input="1" value="${esc(s.renamingDraft)}" style="flex:1;min-width:0;padding:2px 6px;font-size:12.5px"/>`
+    : `<span class="lb">${esc(p.title) || "Untitled"}</span>`;
   return `
-    <div class="gn-item"${active} data-action="open-page" data-id="${esc(p.id)}" style="padding-left:${pad}px">
+    <div class="gn-item"${active} data-action="open-page" data-id="${esc(p.id)}" data-menu="page" style="padding-left:${pad}px">
       ${twist}
       <span class="ic">${typeIcon(p)}</span>
-      <span class="lb">${esc(p.title) || "Untitled"}</span>
+      ${label}
       ${add}${fav}
-      ${pop}
     </div>`;
 }
 
@@ -59,7 +56,7 @@ function trashView(s: AppState): string {
   const trashed = Object.values(s.pages).filter((p) => p.deleted);
   const rows = trashed.length > 0
     ? trashed.map((p) => `
-      <div class="gn-item" style="padding-left:10px">
+      <div class="gn-item" data-menu="trash" data-id="${esc(p.id)}" style="padding-left:10px">
         <span class="ic">${typeIcon(p)}</span>
         <span class="lb">${esc(p.title) || "Untitled"}</span>
         <span class="fav" data-action="restore-page" data-id="${esc(p.id)}" title="Restore">${icon("undo", 11)}</span>
@@ -145,7 +142,7 @@ export function topbarMarkup(s: AppState): string {
     .map((p) => {
       const active = s.activePageId === p.id ? ` data-active="true"` : "";
       return `
-        <div class="gn-tab"${active} data-action="open-page" data-id="${esc(p.id)}">
+        <div class="gn-tab"${active} data-action="open-page" data-id="${esc(p.id)}" data-menu="tab">
           ${typeIcon(p)}
           <span style="overflow:hidden;white-space:nowrap;flex:0 1 auto">${esc(p.title) || "Untitled"}</span>
           <span class="x" data-action="close-tab" data-id="${esc(p.id)}" style="flex:none">${icon("close", 9)}</span>
@@ -172,4 +169,59 @@ export function topbarMarkup(s: AppState): string {
       <div class="gn-row gn-grow" style="gap:2px;overflow:hidden;flex-wrap:nowrap">${tabs}</div>
       <div class="gn-faint" style="font-size:11px;padding:0 6px;flex:none">${save}</div>
     </div>`;
+}
+
+// ── Page/tab context menu ────────────────────────────────────────────────────
+
+export type CtxMenuKind = "page" | "tab" | "trash";
+
+const CTX_W = 218;
+const CTX_ROW = 27;
+const CTX_SEP = 9;
+
+/** Right-click menu for sidebar page rows, topbar tabs, and trash rows.
+ *  Rendered inside a full-window backdrop panel — clicks anywhere off the
+ *  menu fall through to the backdrop's ctx-dismiss action. (x, y) are
+ *  screen-space px. */
+export function ctxMenuMarkup(s: AppState, pageId: string, kind: CtxMenuKind, x: number, y: number): string {
+  const p = s.pages[pageId];
+  if (!p) return "";
+  const mi = (action: string, label: string, opts: { danger?: boolean; icon?: string } = {}) =>
+    `<div class="mi"${opts.danger ? ' data-kind="danger"' : ""} data-action="${action}" data-id="${esc(pageId)}">` +
+    `${opts.icon ? `<span style="display:flex">${icon(opts.icon, 12)}</span>` : ""}` +
+    `<span class="gn-grow">${esc(label)}</span></div>`;
+  const sep = `<div class="gn-divider" style="margin:3px 2px"></div>`;
+  let items = "";
+  let h = 10;
+  const add = (html: string, hh: number) => { items += html; h += hh; };
+  if (kind === "trash") {
+    add(mi("ctx-restore", "Restore", { icon: "undo" }), CTX_ROW);
+    add(sep, CTX_SEP);
+    add(mi("ctx-destroy", "Delete forever", { icon: "close", danger: true }), CTX_ROW);
+  } else {
+    add(mi("ctx-open", "Open", { icon: typeIconName(p) }), CTX_ROW);
+    if (kind === "tab") {
+      add(mi("ctx-close", "Close tab"), CTX_ROW);
+      add(mi("ctx-close-others", "Close other tabs"), CTX_ROW);
+      add(mi("ctx-close-all", "Close all tabs"), CTX_ROW);
+    }
+    add(sep, CTX_SEP);
+    add(mi("ctx-rename", "Rename", { icon: "edit" }), CTX_ROW);
+    add(mi("ctx-fav", p.favorite ? "Remove from favorites" : "Add to favorites", { icon: "star" }), CTX_ROW);
+    add(mi("ctx-copy-link", "Copy link", { icon: "link" }), CTX_ROW);
+    add(mi("ctx-new-sub", "New sub-page", { icon: "plus" }), CTX_ROW);
+    add(mi("ctx-dup", "Duplicate", { icon: "doc" }), CTX_ROW);
+    add(sep, CTX_SEP);
+    add(mi("ctx-trash", "Move to trash", { icon: "trash", danger: true }), CTX_ROW);
+  }
+  const mx = Math.min(Math.max(4, x), Math.max(4, s.windowW - CTX_W - 4));
+  const my = Math.min(Math.max(4, y), Math.max(4, s.windowH - h - 4));
+  return `
+    <div style="position:relative;width:100%;height:100%" data-action="ctx-dismiss">
+      <div class="gn-menu" style="position:absolute;left:${mx}px;top:${my}px;width:${CTX_W}px">${items}</div>
+    </div>`;
+}
+
+function typeIconName(p: PageMeta): string {
+  return p.type === "doc" ? "doc" : p.type === "board" ? "board" : "canvas";
 }

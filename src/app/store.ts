@@ -66,6 +66,11 @@ export interface AppState {
   thumbVersion: number;
   /** Which pane the sidebar shows: the page tree, trash, or settings. */
   sidebarView: "pages" | "trash" | "settings";
+  /** Page being renamed inline in the sidebar (context-menu "Rename"). */
+  renamingId: string | null;
+  /** Live draft of the sidebar rename input — kept out of the chrome
+   *  re-render key so typing doesn't rebuild the input mid-edit. */
+  renamingDraft: string;
   /** Per-view runtime handles, installed by view modules. */
   worldState?: () => unknown;
   uiState?: () => unknown;
@@ -96,6 +101,8 @@ export const store = createStore<AppState>(() => ({
   searchOpen: false,
   thumbVersion: 0,
   sidebarView: "pages",
+  renamingId: null,
+  renamingDraft: "",
 }));
 
 export function pageIcon(type: PageType): string {

@@ -5,7 +5,7 @@
 
 import { newId, pageIcon, store, type PageMeta, type PageType } from "./store";
 import { newBlockId } from "../editor/model";
-import { savePageContent, deletePageFile } from "./workspace";
+import { savePageContent, deletePageFile, loadPageContent } from "./workspace";
 import { deleteThumbFile } from "./thumbnails";
 import { newColumn, type BoardContent } from "../board/model";
 import { emptyWhiteboard, type WbContent } from "../wb/model";
@@ -61,6 +61,18 @@ export function openPage(id: string): void {
     activePageId: id,
     openTabs: s.openTabs.includes(id) ? s.openTabs : [...s.openTabs, id],
   });
+}
+
+/** Follow a `[[Title]]` wiki-link — opens the page with that title, or
+ *  creates a fresh doc with it when none exists (Obsidian-style). */
+export function openPageByTitle(title: string): void {
+  const t = title.trim().toLowerCase();
+  if (!t) return;
+  const s = store.getState();
+  const hit = Object.values(s.pages).find(
+    (p) => !p.deleted && (p.title || "").trim().toLowerCase() === t);
+  if (hit) { openPage(hit.id); return; }
+  createPage({ title: title.trim(), type: "doc" });
 }
 
 /** All descendant ids of `id` (depth-first). */
@@ -161,6 +173,61 @@ export function closeTab(id: string): void {
     openTabs: tabs,
     activePageId: s.activePageId === id ? (tabs[tabs.length - 1] ?? null) : s.activePageId,
   });
+}
+
+export function closeOtherTabs(id: string): void {
+  const s = store.getState();
+  if (!s.openTabs.includes(id)) return;
+  store.setState({ openTabs: [id], activePageId: s.pages[id] ? id : s.activePageId });
+}
+
+export function closeAllTabs(): void {
+  store.setState({ openTabs: [], activePageId: null });
+}
+
+/** Deep-duplicate a page and its whole subtree — new ids, copied content
+ *  files, inserted right after the source in its sibling list. */
+export function duplicatePage(id: string): PageMeta | null {
+  const s = store.getState();
+  const src = s.pages[id];
+  if (!src) return null;
+  const ids = [id, ...descendants(s, id)];
+  const idMap = new Map<string, string>();
+  ids.forEach((old) => idMap.set(old, newId("page")));
+  const pages = { ...s.pages };
+  ids.forEach((old) => {
+    const o = s.pages[old]!;
+    const nid = idMap.get(old)!;
+    pages[nid] = {
+      ...o,
+      id: nid,
+      title: old === id && o.title ? `${o.title} copy` : o.title,
+      parentId: old === id ? o.parentId : (o.parentId ? idMap.get(o.parentId) ?? null : null),
+      children: o.children.filter((c) => idMap.has(c)).map((c) => idMap.get(c)!),
+      deleted: false,
+      deletedWith: null,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    const c = loadPageContent(old);
+    if (c) savePageContent(nid, c);
+  });
+  const rootId = idMap.get(id)!;
+  const patch: Partial<ReturnType<typeof store.getState>> = { pages };
+  if (src.parentId && pages[src.parentId]) {
+    const par = pages[src.parentId]!;
+    const kids = [...par.children];
+    kids.splice(par.children.indexOf(id) + 1 || kids.length, 0, rootId);
+    pages[src.parentId] = { ...par, children: kids, expanded: true };
+  } else {
+    const rootOrder = [...s.rootOrder];
+    const ri = rootOrder.indexOf(id);
+    rootOrder.splice(ri < 0 ? rootOrder.length : ri + 1, 0, rootId);
+    patch.rootOrder = rootOrder;
+  }
+  store.setState(patch);
+  openPage(rootId);
+  return pages[rootId]!;
 }
 
 export { pageIcon };

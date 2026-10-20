@@ -10,9 +10,11 @@
 // ============================================================================
 
 import { RunCache, type RunShape } from "../text/run-cache";
+import type { Rgba } from "../text/gpu-text";
 import { FALLBACK_FACES, faceKey } from "../text/fonts";
 import { blockBaseStyle, blockText, type Block, type Doc, type DocPos, type TextStyle } from "./model";
 import { highlightLine, type SyntaxPalette } from "./highlight";
+import { wikiLinks } from "./links";
 
 export interface LaidSegment {
   /** Pen x of this slice within the line (doc space). */
@@ -260,6 +262,10 @@ export class DocLayouter {
       });
       off += text.length;
     };
+    // Wiki-links re-style the `[[Title]]` range — derived from raw text like
+    // syntax highlight, so no model state is involved (see editor/links.ts).
+    const links = block.kind === "codeblock" ? [] : wikiLinks(blockText(block));
+    let spanStart = 0;
     block.spans.forEach(span => {
       const style = resolveStyle(block, span.style, theme);
       if (block.kind === "codeblock" && span.text) {
@@ -280,10 +286,27 @@ export class DocLayouter {
             off += 1;
           }
         }
-        return;
+      } else {
+        const fk = faceKey(style.family, style.weight, style.italic ? "italic" : "normal");
+        if (links.length === 0 || span.style.code) {
+          emit(span.text, style, fk);
+        } else {
+          // Split the span at link boundaries — linked slices draw accent +
+          // underline; the pieces still flow through `emit` for font fallback.
+          const linkStyle: TextStyle = { ...style, color: theme.link, underline: true };
+          let cur = 0;
+          links.forEach(l => {
+            const a = Math.max(l.start - spanStart, cur);
+            const z = Math.min(l.end - spanStart, span.text.length);
+            if (z <= a) return;
+            if (a > cur) emit(span.text.slice(cur, a), style, fk);
+            emit(span.text.slice(a, z), linkStyle, fk);
+            cur = z;
+          });
+          if (cur < span.text.length) emit(span.text.slice(cur), style, fk);
+        }
       }
-      const fk = faceKey(style.family, style.weight, style.italic ? "italic" : "normal");
-      emit(span.text, style, fk);
+      spanStart += span.text.length;
     });
     return runs;
   }
@@ -471,5 +494,7 @@ export interface EditorTheme {
   /** Floating format-toolbar surface + label colors. */
   toolbarBg: Rgba;
   toolbarText: Rgba;
+  /** Wiki-link `[[Page Title]]` color (accent). */
+  link: Rgba;
   syntax: SyntaxPalette;
 }

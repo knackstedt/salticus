@@ -24,7 +24,9 @@ import { docCompare, blockText, newBlockId, type Block, type BlockKind, type Doc
 import { History } from "./history";
 import { matchBlockShortcut, matchInlineShortcut, inlineMarkerLen, stripBlockPrefix, styleRange } from "./markdown";
 import { darkSyntax, lightSyntax } from "./highlight";
+import { wikiLinkAt } from "./links";
 import { store } from "../app/store";
+import { openPageByTitle } from "../app/actions";
 import { createLogger } from "@downdraft/engine/util/logger";
 
 const log = createLogger();
@@ -109,6 +111,8 @@ interface CtxMenuState {
   subRect: { x: number; y: number; w: number; h: number } | null;
   /** Doc position where the menu was invoked — target for block ops. */
   pos: DocPos;
+  /** Wiki-link target under the cursor when the menu opened on one. */
+  linkTarget?: string;
   x: number;
   y: number;
   t0: number;
@@ -440,6 +444,16 @@ export class EditorSurface implements ScreenUiCompositor {
         this.dragging = false;
         return;
       }
+
+      // Wiki-link click — follow `[[Title]]` instead of placing a caret.
+      // Clicking the bracket-adjacent edge still plants the caret normally.
+      const link = this.linkAtPos(pos);
+      if (link) {
+        this.focused = true;
+        this.dragging = false;
+        openPageByTitle(link.target);
+        return;
+      }
       this.dragX = e.clientX;
       this.dragY = e.clientY;
 
@@ -687,9 +701,21 @@ export class EditorSurface implements ScreenUiCompositor {
     return (prev.y + prev.height + lbs[idx]!.y) / 2;
   }
 
+  /** Wiki-link under a doc position, if any (never inside codeblocks). */
+  private linkAtPos(pos: DocPos): { target: string } | null {
+    const b = this.doc.blocks[pos.block];
+    if (!b || b.kind === "codeblock") return null;
+    return wikiLinkAt(blockText(b), pos.offset);
+  }
+
   private openCtxMenu(x: number, y: number, pos: DocPos, mode: "text" | "block"): void {
     const hasSel = this.selRange() !== null;
+    const link = mode === "text" ? this.linkAtPos(pos) : null;
     const rows: MenuRow[] = mode === "text" ? [
+      ...(link ? [
+        { id: "openLink", label: "Open link", hint: link.target } satisfies MenuRow,
+        { sep: true } satisfies MenuRow,
+      ] : []),
       { id: "cut", label: "Cut", hint: "Ctrl+X", disabled: !hasSel },
       { id: "copy", label: "Copy", hint: "Ctrl+C", disabled: !hasSel },
       { id: "paste", label: "Paste", hint: "Ctrl+V" },
@@ -714,7 +740,7 @@ export class EditorSurface implements ScreenUiCompositor {
       const r = rows[i]!;
       if (!("sep" in r) && !r.disabled) { index = i; break; }
     }
-    this.ctxMenu = { rows, index, rect: null, subOpen: false, subIndex: 0, subRect: null, pos, x, y, t0: this.time };
+    this.ctxMenu = { rows, index, rect: null, subOpen: false, subIndex: 0, subRect: null, pos, linkTarget: link?.target, x, y, t0: this.time };
     this.slash = null;
     this.toolbar = null;
   }
@@ -760,6 +786,7 @@ export class EditorSurface implements ScreenUiCompositor {
     if (!m) return;
     const target = clamp(m.pos.block, 0, Math.max(0, this.doc.blocks.length - 1));
     switch (id) {
+      case "openLink": if (m.linkTarget) openPageByTitle(m.linkTarget); return;
       case "cut": this.copy(true); return;
       case "copy": this.copy(false); return;
       case "paste": this.paste(); return;
@@ -2011,7 +2038,7 @@ export class EditorSurface implements ScreenUiCompositor {
     const text = seg.runText.slice(seg.start, seg.end);
     if (!text) return;
     const t = this.theme;
-    let color = seg.style.code && block.kind !== "codeblock" ? t.codeText : seg.style.color;
+    let color = (seg.style.code && block.kind !== "codeblock" ? t.codeText : seg.style.color) ?? t.text;
     // Completed todos render dimmed.
     if (block.kind === "todo" && block.checked) color = [color[0], color[1], color[2], color[3] * 0.55];
     const baselineY = oy + line.baseline;
@@ -2029,10 +2056,10 @@ export class EditorSurface implements ScreenUiCompositor {
 
     const penX = ox + seg.x;
     if (seg.style.underline) {
-      p.rect(penX, baselineY + 2, segW, 1.5, seg.style.color);
+      p.rect(penX, baselineY + 2, segW, 1.5, color);
     }
     if (seg.style.strikethrough) {
-      p.rect(penX, baselineY - seg.run.ascent * 0.32, segW, 1.5, seg.style.color);
+      p.rect(penX, baselineY - seg.run.ascent * 0.32, segW, 1.5, color);
     }
   }
 
@@ -2524,6 +2551,7 @@ export function darkTheme(): EditorTheme {
     bulletColor: [0.55, 0.57, 0.64, 1],
     toolbarBg: [0.16, 0.17, 0.21, 0.98],
     toolbarText: [0.90, 0.91, 0.96, 1],
+    link: [0.50, 0.66, 0.98, 1],
     syntax: darkSyntax,
   };
 }
@@ -2543,6 +2571,7 @@ export function lightTheme(): EditorTheme {
     bulletColor: [0.45, 0.47, 0.52, 1],
     toolbarBg: [1, 1, 1, 0.98],
     toolbarText: [0.16, 0.17, 0.21, 1],
+    link: [0.18, 0.40, 0.92, 1],
     syntax: lightSyntax,
   };
 }

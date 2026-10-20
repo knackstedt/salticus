@@ -102,14 +102,6 @@ body { background: transparent; color: ${t.text}; font-family: 'Inter'; font-siz
 .gn-item .fav:hover { background: ${t.bgActive}; color: ${t.warn}; }
 .gn-item .fav.add:hover { color: ${t.text}; }
 .gn-item .fav.on { color: ${t.warn}; }
-.gn-item .thumb-pop { display: none; position: absolute; left: 10px; top: 26px;
-  z-index: 50; width: 226px; background: ${t.bgElev}; border: 1px solid ${t.line};
-  border-radius: 8px; padding: 6px; box-shadow: 0 6px 20px #0006; }
-.gn-item:hover .thumb-pop { display: block; }
-.thumb-pop .thumb-img { width: 214px; border-radius: 5px; display: block;
-  border: 1px solid ${t.lineSoft}; }
-.thumb-pop .tt { font-size: 11px; color: ${t.textDim}; padding: 5px 2px 1px;
-  overflow: hidden; }
 .gn-btn[data-active="true"] { background: ${t.bgActive}; color: ${t.text}; }
 
 .gn-section { font-size: 11px; font-weight: 600; color: ${t.textFaint};

@@ -9,15 +9,15 @@
 
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import type { HtmlUiContext, UiPanelHandle } from "@downdraft/engine/modules/html-ui";
+import type { HtmlUiContext, OsrDomEvent, UiPanelHandle } from "@downdraft/engine/modules/html-ui";
 import type { GameContext } from "@downdraft/engine/app/main";
 import { createLogger } from "@downdraft/engine/util/logger";
 import { store } from "../app/store";
-import { closeTab, createPage, deletePage, destroyPage, openPage, restorePage, toggleExpanded, toggleFavorite } from "../app/actions";
+import { closeAllTabs, closeOtherTabs, closeTab, createPage, deletePage, destroyPage, duplicatePage, openPage, renamePage, restorePage, toggleExpanded, toggleFavorite } from "../app/actions";
 import { serveThumbs, setThumbUi } from "../app/thumbnails";
 import { chromeCss, tokens, type ThemeTokens } from "../app/theme";
 import { iconBytes } from "./icons";
-import { sidebarMarkup, topbarMarkup } from "./shell-markup";
+import { ctxMenuMarkup, sidebarMarkup, topbarMarkup, type CtxMenuKind } from "./shell-markup";
 
 const log = createLogger();
 
@@ -71,6 +71,12 @@ function pageCss(t: ThemeTokens, fontFaces: string): string {
   return `<style>${fontFaces}${chromeCss(t)}</style>`;
 }
 
+/** OS clipboard write — same native-window bridge the editor uses. */
+function clipboardSet(text: string): void {
+  const nw = (globalThis as { __nativeWindow?: { setClipboardText?: (t: string) => void } }).__nativeWindow;
+  try { nw?.setClipboardText?.(text); } catch (e) { log.warn("ui", `clipboard set failed: ${e}`); }
+}
+
 export function mountShell(ui: HtmlUiContext, ctx: GameContext): ShellHandles {
   const s0 = store.getState();
   const W = ctx.surface.width;
@@ -115,11 +121,79 @@ export function mountShell(ui: HtmlUiContext, ctx: GameContext): ShellHandles {
     });
   }
 
+  // ── Page/tab context menu + inline rename ─────────────────────────────
+  //
+  // The Blitz backend emits a "contextmenu" DOM event on right-click; its
+  // merged data-* attrs carry the data-menu marker set on page rows/tabs in
+  // shell-markup. The menu itself is a transient full-window transparent
+  // panel — clicks off the menu land on its backdrop (ctx-dismiss).
+  let menu: UiPanelHandle | null = null;
+
+  store.setState({
+    uiState: () => {
+      const s = store.getState();
+      return { renamingId: s.renamingId, renamingDraft: s.renamingDraft, ctxMenuOpen: menu !== null };
+    },
+  });
+
+  const closeCtxMenu = () => { menu?.dispose(); menu = null; };
+
+  const openCtxMenu = (pageId: string, kind: CtxMenuKind, sx: number, sy: number) => {
+    closeCtxMenu();
+    const s = store.getState();
+    // No .gn-panel here — the menu is a transparent full-window overlay, so
+    // only the .gn-menu card itself paints (its backdrop is event-only).
+    menu = ui.mount(
+      `<div class="gn-col" style="width:100%;height:100%">${pageCss(tokens(s.theme), fontFaces)}${ctxMenuMarkup(s, pageId, kind, sx, sy)}</div>`,
+      { id: "ctxmenu", rect: { x: 0, y: 0, w: s.windowW, h: s.windowH }, z: 60, scale: 2 },
+    );
+    menu.onEvent((ev) => {
+      if (ev.t === "contextmenu" || (ev.t === "keydown" && ev.k === "Escape")) closeCtxMenu();
+    });
+  };
+  ui.onDispose(closeCtxMenu);
+
+  const commitRename = () => {
+    const s = store.getState();
+    if (!s.renamingId) return;
+    const { renamingId, renamingDraft } = s;
+    store.setState({ renamingId: null });
+    renamePage(renamingId, renamingDraft.trim());
+  };
+
+  const panelEvents = (panel: UiPanelHandle) => (ev: OsrDomEvent) => {
+    const s = store.getState();
+    if (ev.t === "contextmenu") {
+      const kind = ev.d?.menu as CtxMenuKind | undefined;
+      if (kind && ev.d?.id && s.pages[ev.d.id]) {
+        openCtxMenu(ev.d.id, kind, panel.rect.x + (ev.x ?? 0), panel.rect.y + (ev.y ?? 0));
+      }
+      return;
+    }
+    if (panel === sidebar && s.renamingId) {
+      // Live draft into the store — deliberately NOT part of the chrome
+      // re-render key, so the input isn't rebuilt under the user's cursor.
+      // Only events carrying data-rename-input belong to the rename input —
+      // the "blur" of the previously-focused node arrives alongside focus().
+      if (ev.t === "input" && ev.d?.["rename-input"]) { store.setState({ renamingDraft: ev.v ?? "" }); return; }
+      if (ev.t === "blur" && ev.d?.["rename-input"]) { commitRename(); return; }
+      if (ev.t === "keydown") {
+        if (ev.k === "Enter") commitRename();
+        else if (ev.k === "Escape") store.setState({ renamingId: null });
+        return;
+      }
+    }
+    if (ev.t === "keydown" && ev.k === "Escape") closeCtxMenu();
+  };
+  sidebar.onEvent(panelEvents(sidebar));
+  topbar.onEvent(panelEvents(topbar));
+
   function rerender() {
     const s = store.getState();
     const css = pageCss(tokens(s.theme), fontFaces);
     sidebar.setHtml(wrap(css + sidebarMarkup(s), "sidebar"));
     topbar.setHtml(wrap(css + topbarMarkup(s), "topbar"));
+    if (s.renamingId) sidebar.focus("[data-rename-input]");
   }
 
   // Selective re-render: only when chrome-relevant state changes.
@@ -127,7 +201,7 @@ export function mountShell(ui: HtmlUiContext, ctx: GameContext): ShellHandles {
   const unsub = store.subscribe((s) => {
     const key = [
       s.pages, s.rootOrder, s.activePageId, s.openTabs, s.theme, s.saveIndicator,
-      s.sidebarView, s.thumbVersion, s.editorAnimations,
+      s.sidebarView, s.thumbVersion, s.editorAnimations, s.renamingId,
     ].map((v) => (typeof v === "object" ? JSON.stringify(v) : v)).join("|");
     if (key !== lastKey) {
       lastKey = key;
@@ -138,6 +212,7 @@ export function mountShell(ui: HtmlUiContext, ctx: GameContext): ShellHandles {
 
   ui.onResize((w, h, dpr) => {
     store.setState({ windowW: w, windowH: h, dpr });
+    closeCtxMenu();
     layout();
   });
 
@@ -178,6 +253,30 @@ export function mountShell(ui: HtmlUiContext, ctx: GameContext): ShellHandles {
   ui.onAction("toggle-palette", () => store.setState((s) => ({ paletteOpen: !s.paletteOpen })));
   ui.onAction("toggle-theme", () => store.setState((s) => ({ theme: s.theme === "dark" ? "light" : "dark" })));
   ui.onAction("toggle-animations", () => store.setState((s) => ({ editorAnimations: !s.editorAnimations })));
+
+  // ── Context-menu item actions (ctx-*) — every one dismisses the menu. ──
+  ui.onAction("ctx-dismiss", () => closeCtxMenu());
+  ui.onAction("ctx-open", (d) => { closeCtxMenu(); if (d.id) openPage(d.id); });
+  ui.onAction("ctx-rename", (d) => {
+    closeCtxMenu();
+    if (d.id && store.getState().pages[d.id]) {
+      store.setState({ renamingId: d.id, renamingDraft: store.getState().pages[d.id]!.title, sidebarView: "pages" });
+    }
+  });
+  ui.onAction("ctx-fav", (d) => { closeCtxMenu(); if (d.id) toggleFavorite(d.id); });
+  ui.onAction("ctx-copy-link", (d) => {
+    closeCtxMenu();
+    const p = d.id ? store.getState().pages[d.id] : null;
+    if (p) clipboardSet(`[[${p.title || "Untitled"}]]`);
+  });
+  ui.onAction("ctx-new-sub", (d) => { closeCtxMenu(); if (d.id) createPage({ type: "doc", parentId: d.id }); });
+  ui.onAction("ctx-dup", (d) => { closeCtxMenu(); if (d.id) duplicatePage(d.id); });
+  ui.onAction("ctx-trash", (d) => { closeCtxMenu(); if (d.id) deletePage(d.id); });
+  ui.onAction("ctx-restore", (d) => { closeCtxMenu(); if (d.id) restorePage(d.id); });
+  ui.onAction("ctx-destroy", (d) => { closeCtxMenu(); if (d.id) destroyPage(d.id); });
+  ui.onAction("ctx-close", (d) => { closeCtxMenu(); if (d.id) closeTab(d.id); });
+  ui.onAction("ctx-close-others", (d) => { closeCtxMenu(); if (d.id) closeOtherTabs(d.id); });
+  ui.onAction("ctx-close-all", () => { closeCtxMenu(); closeAllTabs(); });
 
   layout();
   return { sidebar, topbar, rerender, layout };
