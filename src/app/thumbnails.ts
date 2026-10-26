@@ -18,6 +18,7 @@ import { encodePNG } from "@downdraft/platform-native";
 import { getNativeHost } from "@downdraft/engine";
 import { createLogger } from "@downdraft/engine/util/logger";
 import { bumpThumb, store } from "./store";
+import { wakeRenderer } from "./frame-governor";
 import { workspaceDir } from "./workspace";
 
 const log = createLogger();
@@ -110,6 +111,9 @@ async function capturePageThumb(id: string): Promise<void> {
   } | null;
   const surf = host?.surface;
   if (!surf?.captureNextFrame) return;
+  // The capture resolves on the next presented frame — wake the render loop
+  // or an idle app would sit out the 2500ms timeout and never produce one.
+  wakeRenderer();
   const frame = await surf.captureNextFrame(2500).catch(() => null);
   if (!frame || store.getState().activePageId !== id) return;
 

@@ -173,6 +173,7 @@ export class EditorSurface implements ScreenUiCompositor {
   private clickPY = 0;
   private dirty = true;
   private time = 0;
+  private lastTickMs = 0;
   private textInputActive = false;
 
   // ── Context menu + block drag ─────────────────────────────────────────────
@@ -1839,11 +1840,17 @@ export class EditorSurface implements ScreenUiCompositor {
   // ── Frame ────────────────────────────────────────────────────────────────
 
   tick(dt: number): void {
-    this.time += dt;
+    // Wall-clock delta: the frame governor services an idle app with sparse
+    // renderOnce() calls, and the engine caps passed dt at 0.1s — anim clocks
+    // must track real elapsed or blink/fades crawl while asleep.
+    const nowMs = performance.now();
+    const rdt = this.lastTickMs > 0 ? Math.min(0.5, (nowMs - this.lastTickMs) / 1000) : dt;
+    this.lastTickMs = nowMs;
+    this.time += rdt;
     this.scrollY += (this.scrollTarget - this.scrollY) * Math.min(1, dt * SCROLL_LERP);
     if (Math.abs(this.scrollTarget - this.scrollY) < 0.1) this.scrollY = this.scrollTarget;
     if (Math.abs(this.scrollTarget - this.scrollY) > 0.5) this.scrollActiveT = this.time;
-    this.blinkT += dt;
+    this.blinkT += rdt;
 
     if (this.flashAnim && this.time - this.flashAnim.t0 > FLASH_DUR) this.flashAnim = null;
     if (this.todoAnim && this.time - this.todoAnim.t0 > CHECK_DUR) this.todoAnim = null;
@@ -1883,6 +1890,10 @@ export class EditorSurface implements ScreenUiCompositor {
       const k = Math.min(1, dt * CARET_LERP);
       this.caretShownX += (this.caretX - this.caretShownX) * k;
       this.caretShownY += (this.caretY - this.caretShownY) * k;
+      // Exponential lerp converges without ever landing — snap under half a
+      // pixel so animating() can report the move finished.
+      if (Math.abs(this.caretShownX - this.caretX) < 0.5) this.caretShownX = this.caretX;
+      if (Math.abs(this.caretShownY - this.caretY) < 0.5) this.caretShownY = this.caretY;
       if (snap) { this.caretShownX = this.caretX; this.caretShownY = this.caretY; }
       // Keep the caret in view — but only after it actually moves, so opening
       // a doc (caret placed at end) doesn't yank the scroll position.
@@ -1900,6 +1911,27 @@ export class EditorSurface implements ScreenUiCompositor {
 
   hasContent(): boolean {
     return this.active && this.cache.ready && !this.disposed;
+  }
+
+  /** Time-driven visuals in flight — the frame governor holds the render
+   *  loop awake until this clears. Caret blink is deliberately excluded
+   *  (wantsBlink() services it at the idle cadence). */
+  animating(): boolean {
+    if (!this.active || this.disposed) return false;
+    if (this.scrollY !== this.scrollTarget) return true;
+    if (this.caretShownX !== this.caretX || this.caretShownY !== this.caretY) return true;
+    if (this.dragging || this.blockDrag || this.scrollDrag) return true;
+    if (this.flashAnim || this.todoAnim) return true;
+    if (this.slash && this.time - this.slash.t0 < POP_DUR) return true;
+    if (this.toolbar && this.time - this.toolbar.t0 < POP_DUR) return true;
+    if (this.ctxMenu && this.time - this.ctxMenu.t0 < POP_DUR) return true;
+    if (this.time - this.scrollActiveT < 1.3) return true; // scrollbar fadeout
+    return false;
+  }
+
+  /** A blinking caret is visible — serviced at ~2fps while the loop sleeps. */
+  wantsBlink(): boolean {
+    return this.active && this.focused && !this.disposed;
   }
 
   render(pass: GPURenderPassEncoder, surfaceW: number, surfaceH: number): void {

@@ -46,6 +46,7 @@ export class PaletteSurface implements ScreenUiCompositor {
   private sel = 0;
   private rows: PaletteRow[] = [];
   private blinkT = 0;
+  private lastTickMs = 0;
   private rect = { x: 0, y: 0, w: 0, h: 0 };
   private bounds = { x: 0, y: 0, w: 0, h: 0 };
 
@@ -155,11 +156,25 @@ export class PaletteSurface implements ScreenUiCompositor {
   }
 
   update(dt: number): void {
-    this.blinkT += dt;
+    // Wall-clock delta — see EditorSurface.tick (sparse renderOnce service).
+    const nowMs = performance.now();
+    const rdt = this.lastTickMs > 0 ? Math.min(0.5, (nowMs - this.lastTickMs) / 1000) : dt;
+    this.lastTickMs = nowMs;
+    this.blinkT += rdt;
   }
 
   hasContent(): boolean {
     return this.open && this.cache.ready && !this.disposed;
+  }
+
+  /** No time-driven animations — the query caret is covered by wantsBlink. */
+  animating(): boolean {
+    return false;
+  }
+
+  /** The query caret blinks while the palette is open. */
+  wantsBlink(): boolean {
+    return this.hasContent();
   }
 
   private text(x: number, y: number, face: string, size: number, str: string, color: Rgba): void {

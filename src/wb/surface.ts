@@ -151,6 +151,7 @@ export class WhiteboardSurface implements ScreenUiCompositor {
   private pendingDbl: { wx: number; wy: number } | null = null;
   private blinkT = 0;
   private time = 0;
+  private lastTickMs = 0;
   private pendingChars: { ch: string; t: number }[] = [];
   /** While exporting: suppress chrome (toolbar/panels/selection/ports/grid)
    *  so a captured frame contains only the board contents. */
@@ -2036,12 +2037,27 @@ export class WhiteboardSurface implements ScreenUiCompositor {
   }
 
   update(dt: number): void {
-    this.time += dt;
-    this.blinkT += dt;
+    // Wall-clock delta — see EditorSurface.tick (sparse renderOnce service).
+    const nowMs = performance.now();
+    const rdt = this.lastTickMs > 0 ? Math.min(0.5, (nowMs - this.lastTickMs) / 1000) : dt;
+    this.lastTickMs = nowMs;
+    this.time += rdt;
+    this.blinkT += rdt;
   }
 
   hasContent(): boolean {
     return this.active && this.cache.ready && !this.disposed;
+  }
+
+  /** The toast fade (~2.7s) is the only time-driven visual — everything else
+   *  repaints on input wakes. */
+  animating(): boolean {
+    return this.active && !this.disposed && this.toast !== null && this.time - this.toast.t < 3;
+  }
+
+  /** A blinking edit caret is visible — serviced at the idle cadence. */
+  wantsBlink(): boolean {
+    return this.active && this.editing !== null && !this.disposed;
   }
 
   render(pass: GPURenderPassEncoder, surfaceW: number, surfaceH: number): void {

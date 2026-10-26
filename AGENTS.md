@@ -43,6 +43,20 @@ the original binary is backed up at `/tmp/libdowndraft_platform.so.orig`.
 The same fix should be applied upstream — a `bun install` / package update
 will revert the local .so and break RTL rendering again.
 
+## Render-on-demand (frame governor)
+
+`src/app/frame-governor.ts` stops the engine's continuous rAF loop when
+nothing is animating — under `DOWNDRAFT_GPU=swiftshader` every frame is
+rasterized by llvmpipe on CPU (~600% idle without it). Wakes come from
+`store.setState`, the input bus, `textinput`, resize, and `wakeRenderer()`.
+While asleep it calls `renderer.renderOnce()` ~2fps for caret blink plus a
+safety repaint. Every `ScreenUiCompositor` must implement
+`animating()` (time-driven visuals in flight — hold the loop) and
+`wantsBlink()` (visible blinking caret — idle-cadence service); keep
+`animating()` honest or the loop never sleeps — exponential lerps must snap
+to their target or they report "animating" forever. `tick`/`update` clocks
+use wall-clock deltas, not the engine's capped `dt`.
+
 ## Text pipeline map
 
 - `src/text/fonts.ts` — bundled faces + `FALLBACK_FACES` ordered chain

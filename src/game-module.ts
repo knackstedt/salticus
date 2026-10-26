@@ -16,6 +16,7 @@ import { TextAtlas } from "./text/atlas";
 import { loadFaces } from "./text/fonts";
 import { initWorkspace, installAutosave, flushNow } from "./app/workspace";
 import { installPageController } from "./app/page-controller";
+import { FrameGovernor } from "./app/frame-governor";
 
 const log = createLogger();
 
@@ -24,6 +25,7 @@ export let editorSurface: EditorSurface | null = null;
 export let kanbanSurface: KanbanSurface | null = null;
 export let wbSurface: WhiteboardSurface | null = null;
 let pageCtl: (() => void) | null = null;
+let governor: FrameGovernor | null = null;
 
 // ============================================================================
 // Graphic Notes — renderer-only GameModule
@@ -89,7 +91,15 @@ export const gameModule: GameModule = {
         mctx.registerUiCompositor?.(board);
         mctx.registerUiCompositor?.(wb);
         mctx.registerUiCompositor?.(palette);
-        mctx.onFrame("afterFrame", (dt) => { surf.tick(dt); board.update(dt); wb.update(dt); palette.update(dt); });
+        // Render-on-demand: the continuous rAF loop stops once nothing is
+        // animating (software rasterization makes idle frames expensive);
+        // wakes come from store changes, input, and the surfaces' own
+        // animating()/wantsBlink() reports.
+        governor = new FrameGovernor(mctx, renderer, () => [surf, board, wb, palette]);
+        mctx.onFrame("afterFrame", (dt) => {
+          surf.tick(dt); board.update(dt); wb.update(dt); palette.update(dt);
+          governor?.noteFrame();
+        });
         surf.setAnimationsEnabled(store.getState().editorAnimations);
         let lastTheme = store.getState().theme;
         const unsub = store.subscribe((s) => {
@@ -106,12 +116,16 @@ export const gameModule: GameModule = {
         void surf.init().then(async () => {
           const defs = await loadFaces();
           for (const def of defs) cache.registerFace(def);
+          // Faces landing may postdate the idle sleep — repaint with them.
+          governor?.wake();
           pageCtl = installPageController({ editor: surf, kanban: board, whiteboard: wb });
           surf.enableTextInput();
         }).catch((e) => log.warn("game", `editor init failed: ${e}`));
         mctx.onDispose(() => {
           pageCtl?.();
           pageCtl = null;
+          governor?.dispose();
+          governor = null;
           unsub();
           unsubAutosave();
           flushNow();
@@ -146,8 +160,8 @@ export const gameModule: GameModule = {
       surface: ctx.surface,
       isRunning: () => renderer.isRunning?.() ?? true,
       renderOnce: () => renderer.renderOnce?.(),
-      pauseRendering: () => renderer.stop(),
-      resumeRendering: () => renderer.start(),
+      pauseRendering: () => governor ? governor.suspend() : renderer.stop(),
+      resumeRendering: () => governor ? governor.resume() : renderer.start(),
       getWorldState: () => store.getState().worldState?.() ?? null,
       getUiState: () => store.getState().uiState?.() ?? null,
       setTestState: (params) => store.getState().setTestState?.(params),

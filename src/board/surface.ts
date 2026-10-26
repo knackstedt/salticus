@@ -80,6 +80,7 @@ export class KanbanSurface implements ScreenUiCompositor {
   private editing: EditState | null = null;
   private blinkT = 0;
   private time = 0;
+  private lastTickMs = 0;
   private hoverCard: string | null = null;
   onChange: ((b: BoardContent) => void) | null = null;
 
@@ -425,12 +426,26 @@ export class KanbanSurface implements ScreenUiCompositor {
   }
 
   update(dt: number): void {
-    this.time += dt;
-    this.blinkT += dt;
+    // Wall-clock delta — see EditorSurface.tick (sparse renderOnce service).
+    const nowMs = performance.now();
+    const rdt = this.lastTickMs > 0 ? Math.min(0.5, (nowMs - this.lastTickMs) / 1000) : dt;
+    this.lastTickMs = nowMs;
+    this.time += rdt;
+    this.blinkT += rdt;
   }
 
   hasContent(): boolean {
     return this.active && this.cache.ready && !this.disposed;
+  }
+
+  /** No time-driven animations — card drags repaint on pointer events. */
+  animating(): boolean {
+    return false;
+  }
+
+  /** A blinking edit caret is visible — serviced at the idle cadence. */
+  wantsBlink(): boolean {
+    return this.active && this.editing !== null && !this.disposed;
   }
 
   render(pass: GPURenderPassEncoder, surfaceW: number, surfaceH: number): void {
