@@ -13,6 +13,12 @@ import type { FaceDef } from "./run-cache";
 
 const FONTS_DIR = join(dirname(fileURLToPath(import.meta.url)), "../../assets/fonts");
 
+// Packaging side effect: the bundler's asset scan stages the pattern's
+// static-prefix subtree into dd-assets/, and import.meta.url is rewritten
+// into that tree — so this bare call is what makes FONTS_DIR resolve in
+// packaged builds. Return value intentionally unused.
+import.meta.glob("../../assets/fonts/*.ttf");
+
 export type FontStyle = "normal" | "italic";
 export type FontFamily = "inter" | "jetbrains" | "hand";
 

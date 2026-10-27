@@ -78,7 +78,10 @@ engine's capped `dt`.
 
 - `src/text/fonts.ts` — bundled faces + `FALLBACK_FACES` ordered chain
   (system Noto faces: script coverage → symbols → CJK → droid-fallback →
-  emoji last).
+  emoji last). The bare `import.meta.glob("../../assets/fonts/*.ttf")` is a
+  required packaging side effect — it stages the font dir into `dd-assets/`
+  so `FONTS_DIR` resolves in compiled binaries. Removing it = invisible text
+  in release builds (v0.1.0/v0.1.1 shipped broken).
 - `src/text/run-cache.ts` — `fallbackPieces()` splits text by which chain
   face covers it (harfbuzz `.notdef` detection, RTL-aware `missingRanges`);
   `getChunk()` prefers CBDT color bitmaps when present.
