@@ -211,7 +211,9 @@ export function mountShell(ui: HtmlUiContext, ctx: GameContext): ShellHandles {
   ui.onDispose(unsub);
 
   ui.onResize((w, h, dpr) => {
-    store.setState({ windowW: w, windowH: h, dpr });
+    // onResize reports CSS px — panel rects/contentRect are buffer px.
+    const bw = Math.round(w * dpr), bh = Math.round(h * dpr);
+    store.setState({ windowW: bw, windowH: bh, dpr });
     closeCtxMenu();
     layout();
   });
