@@ -38,20 +38,30 @@
   or indexed `for`).
 - No Devin co-author trailer in commits.
 
-## Locally rebuilt platform native lib (RTL text)
+## Locally rebuilt platform native lib (RTL text + ctrl-chord textinput)
 
 `node_modules/@downdraft/native-linux-x64/lib/libdowndraft_platform.so` is a
-**locally built 0.8.0 + RTL-fix binary**, not the shipped one.
-`ft_shim_render_text` measured text at `f32::MAX` buffer width, so
-cosmic-text anchored RTL runs at x≈line_w (~3e38) and all Hebrew/Arabic
-ink clipped to nothing. The fix re-layouts the buffer at the measured
-advance before drawing — committed upstream as
-`downdraft-engine@a5810f65` (`packages/platform-native/native-rs/src/text.rs`),
-so it ships with the next release >0.8.0. Until then a `bun install` /
-package refetch reverts the local .so and breaks RTL again — rebuild with
-`cd ~/Pivot/source/apophis/downdraft-engine/packages/platform-native &&
-bun run build:native` and copy `native/linux-x64/libdowndraft_platform.so`
-into `node_modules/@downdraft/native-linux-x64/lib/`.
+**locally built 0.8.0 + two fixes**, not the shipped one:
+
+1. **RTL**: `ft_shim_render_text` measured text at `f32::MAX` buffer width,
+   so cosmic-text anchored RTL runs at x≈line_w (~3e38) and all
+   Hebrew/Arabic ink clipped to nothing. The fix re-layouts the buffer at
+   the measured advance before drawing — committed upstream as
+   `downdraft-engine@a5810f65` (`native-rs/src/text.rs`), ships in >0.8.0.
+2. **Ctrl-chord textinput**: `translate_window_event`
+   (`native-rs/src/window/events.rs`) forwarded `event.text` for every
+   keydown while text input was enabled — on X11 Ctrl+A delivers "a", so
+   any Ctrl/Cmd chord (select-all, bold, undo…) also inserted the char and
+   replaced the live selection (Ctrl+A wiped the doc). The event now gates
+   on modifiers: GUI always suppresses, CTRL suppresses unless ALT is also
+   held (Ctrl+Alt = AltGr on Windows). **Not yet committed upstream** — the
+   change sits uncommitted in the downdraft-engine working tree.
+
+Until both ship upstream, a `bun install` / package refetch reverts the
+local .so — rebuild with `cd
+~/Pivot/source/apophis/downdraft-engine/packages/platform-native && bun run
+build:native` and copy `native/linux-x64/libdowndraft_platform.so` into
+`node_modules/@downdraft/native-linux-x64/lib/`.
 
 ## Render-on-demand (frame governor)
 
