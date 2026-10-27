@@ -49,6 +49,10 @@ export class PaletteSurface implements ScreenUiCompositor {
   private lastTickMs = 0;
   private rect = { x: 0, y: 0, w: 0, h: 0 };
   private bounds = { x: 0, y: 0, w: 0, h: 0 };
+  /** Engine damage-gate mark — refreshed rows/rect while closed must still
+   *  repaint the frame the palette appears on. */
+  private framePending = true;
+  private blinkPhase = -1;
 
   constructor(private ctx: RendererModuleContext, sharedCache?: RunCache) {
     const device = ctx.getDevice();
@@ -65,6 +69,7 @@ export class PaletteSurface implements ScreenUiCompositor {
 
   setRect(r: { x: number; y: number; w: number; h: number }): void {
     this.rect = r;
+    this.framePending = true;
   }
 
   private setOpen(open: boolean): void {
@@ -90,6 +95,7 @@ export class PaletteSurface implements ScreenUiCompositor {
     ].filter((c) => !q || c.label.toLowerCase().includes(q));
     this.rows = [...rows.slice(0, MAX_ROWS - 2), ...cmds];
     if (this.sel >= this.rows.length) this.sel = Math.max(0, this.rows.length - 1);
+    this.framePending = true;
   }
 
   private installInput(): void {
@@ -161,10 +167,23 @@ export class PaletteSurface implements ScreenUiCompositor {
     const rdt = this.lastTickMs > 0 ? Math.min(0.5, (nowMs - this.lastTickMs) / 1000) : dt;
     this.lastTickMs = nowMs;
     this.blinkT += rdt;
+    const phase = Math.floor(this.blinkT * 2);
+    if (phase !== this.blinkPhase) {
+      this.blinkPhase = phase;
+      if (this.wantsBlink()) this.ctx.requestFrame();
+    }
   }
 
   hasContent(): boolean {
     return this.open && this.cache.ready && !this.disposed;
+  }
+
+  /** Engine damage-gate poll (damageOnly): refresh/rect mutations mark
+   *  framePending; open/close rides the paletteOpen store mark. */
+  takeDirty(): boolean {
+    const d = this.framePending || this.animating();
+    this.framePending = false;
+    return d;
   }
 
   /** No time-driven animations — the query caret is covered by wantsBlink. */
@@ -172,7 +191,8 @@ export class PaletteSurface implements ScreenUiCompositor {
     return false;
   }
 
-  /** The query caret blinks while the palette is open. */
+  /** The query caret blinks while the palette is open — blink flips mark a
+   *  frame via ctx.requestFrame() (see update). */
   wantsBlink(): boolean {
     return this.hasContent();
   }

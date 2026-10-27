@@ -205,15 +205,16 @@ export class GpuTextPass {
     pass.setBindGroup(0, this.bindGroup);
     ranges.forEach(r => {
       if (r.end <= r.start) return;
-      if (r.scissor) {
-        const [sx, sy, sw, sh] = r.scissor;
+      const clip = r.scissor;
+      if (clip) {
+        const [sx, sy, sw, sh] = clip;
         pass.setScissorRect(
           Math.max(0, Math.floor(sx)), Math.max(0, Math.floor(sy)),
           Math.max(0, Math.min(surfaceW - sx, Math.ceil(sw))),
           Math.max(0, Math.min(surfaceH - sy, Math.ceil(sh))));
       }
       pass.draw(6, r.end - r.start, 0, r.start);
-      if (r.scissor) pass.setScissorRect(0, 0, surfaceW, surfaceH);
+      if (clip) pass.setScissorRect(0, 0, surfaceW, surfaceH);
     });
   }
 

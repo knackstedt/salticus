@@ -2,11 +2,21 @@
 
 ## Running
 
-- `bun run dev` starts the app via `draft dev`. The dev script pins
-  `DOWNDRAFT_GPU=swiftshader` — do **not** remove it. The hardware-GPU path
-  (`DOWNDRAFT_GPU` unset or `hardware`) panics inside wgpu/mesa during
-  adapter init on this machine (Bun abort, exit 129). `swiftshader` is the
-  same default the MCP harness uses.
+- `bun run dev` starts the app via `draft dev`. Since engine 0.7.x the
+  hardware-GPU path works on this machine (RTX 3090 / Vulkan); the old
+  wgpu/mesa init panic (Bun abort, exit 129) is fixed. `swiftshader`
+  remains selectable via `DOWNDRAFT_GPU=swiftshader draft dev` and is what
+  the MCP deterministic harness uses.
+- Rendering is damage-driven (engine `damageOnly` since 0.8.0): the rAF
+  chain parks when no compositor reports `takeDirty()`, keepalive ticks
+  run frame hooks at `damageIdleFps` (4Hz here). New surfaces must return
+  false from `takeDirty()` when unchanged — an always-true compositor
+  keeps the chain hot. Mutations mark frames via engine input/resize
+  marks, `ctx.requestFrame()` in tick/update (blink flips, animations),
+  or the FrameGovernor bridge (store subscribe, textinput, `wakeRenderer()`).
+  Do NOT hand-roll partial swapchain repaints — `getCurrentTexture()`
+  hands back rotating backbuffers whose retained contents are undefined;
+  a scissored load-pass presents stale/black frames (tried, reverted).
 - `DOWNDRAFT_DETERMINISTIC=1` additionally stabilizes rendering for
   screenshot-based testing.
 - `bun draft dev --no-hmr` runs the entry directly without the dev shell.
@@ -28,34 +38,34 @@
   or indexed `for`).
 - No Devin co-author trailer in commits.
 
-## Locally patched platform native lib (RTL text)
+## Locally rebuilt platform native lib (RTL text)
 
 `node_modules/@downdraft/native-linux-x64/lib/libdowndraft_platform.so` is a
-**locally rebuilt copy**, not the shipped binary. `ft_shim_render_text`
-(cosmic-text) set the buffer width to `f32::MAX` for wrap avoidance, so RTL
-runs laid out starting at x≈3e38 and all RTL ink clipped to nothing — pure
-Hebrew/Arabic strings rasterized blank. The vendored patch re-layouts the
-buffer at the measured advance before drawing (see
-`packages/platform-native/native-rs/src/text.rs` in
-`~/source/downdraft-engine`, function `ft_shim_render_text`). A patched
-source tree + build artifacts live at `/tmp/dd-native` + `/tmp/dd-target`;
-the original binary is backed up at `/tmp/libdowndraft_platform.so.orig`.
-The same fix should be applied upstream — a `bun install` / package update
-will revert the local .so and break RTL rendering again.
+**locally built 0.8.0 + RTL-fix binary**, not the shipped one.
+`ft_shim_render_text` measured text at `f32::MAX` buffer width, so
+cosmic-text anchored RTL runs at x≈line_w (~3e38) and all Hebrew/Arabic
+ink clipped to nothing. The fix re-layouts the buffer at the measured
+advance before drawing — committed upstream as
+`downdraft-engine@a5810f65` (`packages/platform-native/native-rs/src/text.rs`),
+so it ships with the next release >0.8.0. Until then a `bun install` /
+package refetch reverts the local .so and breaks RTL again — rebuild with
+`cd ~/Pivot/source/apophis/downdraft-engine/packages/platform-native &&
+bun run build:native` and copy `native/linux-x64/libdowndraft_platform.so`
+into `node_modules/@downdraft/native-linux-x64/lib/`.
 
 ## Render-on-demand (frame governor)
 
-`src/app/frame-governor.ts` stops the engine's continuous rAF loop when
-nothing is animating — under `DOWNDRAFT_GPU=swiftshader` every frame is
-rasterized by llvmpipe on CPU (~600% idle without it). Wakes come from
-`store.setState`, the input bus, `textinput`, resize, and `wakeRenderer()`.
-While asleep it calls `renderer.renderOnce()` ~2fps for caret blink plus a
-safety repaint. Every `ScreenUiCompositor` must implement
-`animating()` (time-driven visuals in flight — hold the loop) and
-`wantsBlink()` (visible blinking caret — idle-cadence service); keep
-`animating()` honest or the loop never sleeps — exponential lerps must snap
-to their target or they report "animating" forever. `tick`/`update` clocks
-use wall-clock deltas, not the engine's capped `dt`.
+`src/app/frame-governor.ts` is the app-side wake bridge for `damageOnly` —
+it does not own the loop. It translates app signals the engine can't see
+(`store.setState`, `textinput`, `wakeRenderer()` for font loads and
+thumbnail captures) into `ctx.requestFrame()` marks, plus a ~2s safety mark
+and MCP `suspend`/`resume` plumbing. Each `ScreenUiCompositor` owns its own
+dirty reporting: `takeDirty()` (frame-pending mutations, `animating()`
+lerps, a settle frame) and blink flips marked via `ctx.requestFrame()` in
+`tick`/`update` while `wantsBlink()`. Keep `animating()` honest or the loop
+never sleeps — exponential lerps must snap to their target or they report
+"animating" forever. `tick`/`update` clocks use wall-clock deltas, not the
+engine's capped `dt`.
 
 ## Text pipeline map
 

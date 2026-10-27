@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "DOWNDRAFT_GPU=swiftshader draft dev",
+    "dev": "draft dev",
     "build": "draft release --stage=build",
     "release": "draft release",
     "typecheck": "tsc --noEmit",
@@ -11,13 +11,13 @@
     "test": "npm test"
   },
   "dependencies": {
-    "@downdraft/engine": "^0.5.1",
-    "@downdraft/platform-native": "^0.5.1",
+    "@downdraft/engine": "^0.8.0",
+    "@downdraft/platform-native": "^0.8.0",
     "harfbuzzjs": "^1.6.3",
     "zustand": "^5.0.15"
   },
   "devDependencies": {
-    "@downdraft/cli": "^0.5.1",
+    "@downdraft/cli": "^0.8.0",
     "@types/node": "^22.10.0",
     "@webgpu/types": "^0.1.71",
     "oxlint": "^1.4.0",

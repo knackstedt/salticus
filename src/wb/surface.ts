@@ -157,6 +157,11 @@ export class WhiteboardSurface implements ScreenUiCompositor {
    *  so a captured frame contains only the board contents. */
   private exportClean = false;
   private toast: { text: string; t: number } | null = null;
+  /** Engine damage-gate mark for mutations that don't ride a store/input
+   *  wake — set in dirty() and the setters below. */
+  private framePending = true;
+  private blinkPhase = -1;
+  private lastAnim = false;
 
   /** Defaults applied to newly drawn items (updated by the props panel). */
   private style = {
@@ -193,10 +198,12 @@ export class WhiteboardSurface implements ScreenUiCompositor {
       this.draft = null;
       this.menu = null;
     }
+    this.framePending = true;
   }
 
   setRect(r: { x: number; y: number; w: number; h: number }): void {
     this.rect = r;
+    this.framePending = true;
   }
 
   setContent(c: WbContent | null): void {
@@ -248,6 +255,7 @@ export class WhiteboardSurface implements ScreenUiCompositor {
   }
 
   private dirty(): void {
+    this.framePending = true;
     this.onChange?.(this.wb);
   }
 
@@ -2043,10 +2051,26 @@ export class WhiteboardSurface implements ScreenUiCompositor {
     this.lastTickMs = nowMs;
     this.time += rdt;
     this.blinkT += rdt;
+    const phase = Math.floor(this.blinkT * 2);
+    if (phase !== this.blinkPhase) {
+      this.blinkPhase = phase;
+      if (this.wantsBlink()) this.ctx.requestFrame();
+    }
   }
 
   hasContent(): boolean {
     return this.active && this.cache.ready && !this.disposed;
+  }
+
+  /** Engine damage-gate poll (damageOnly): framePending covers content
+   *  mutations; the toast fade rides animating() and lastAnim lands its
+   *  settle frame. */
+  takeDirty(): boolean {
+    const a = this.animating();
+    const d = this.framePending || a || this.lastAnim;
+    this.framePending = false;
+    this.lastAnim = a;
+    return d;
   }
 
   /** The toast fade (~2.7s) is the only time-driven visual — everything else
@@ -2055,7 +2079,8 @@ export class WhiteboardSurface implements ScreenUiCompositor {
     return this.active && !this.disposed && this.toast !== null && this.time - this.toast.t < 3;
   }
 
-  /** A blinking edit caret is visible — serviced at the idle cadence. */
+  /** A blinking edit caret is visible — blink flips mark a frame via
+   *  ctx.requestFrame() (see update). */
   wantsBlink(): boolean {
     return this.active && this.editing !== null && !this.disposed;
   }

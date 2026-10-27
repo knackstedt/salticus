@@ -82,6 +82,10 @@ export class KanbanSurface implements ScreenUiCompositor {
   private time = 0;
   private lastTickMs = 0;
   private hoverCard: string | null = null;
+  /** Engine damage-gate mark for mutations that don't ride a store/input
+   *  wake — set in dirty() and the setters below. */
+  private framePending = true;
+  private blinkPhase = -1;
   onChange: ((b: BoardContent) => void) | null = null;
 
   constructor(private ctx: RendererModuleContext, sharedCache?: RunCache) {
@@ -96,16 +100,19 @@ export class KanbanSurface implements ScreenUiCompositor {
     if (this.active === a) return;
     this.active = a;
     if (!a) { this.editing = null; this.drag = null; }
+    this.framePending = true;
   }
 
   setRect(r: { x: number; y: number; w: number; h: number }): void {
     this.rect = r;
+    this.framePending = true;
   }
 
   setBoard(b: BoardContent | null): void {
     this.board = b ?? { columns: [newColumn("To Do", 0), newColumn("In Progress", 1), newColumn("Done", 3)] };
     this.editing = null;
     this.drag = null;
+    this.framePending = true;
   }
 
   getBoard(): BoardContent {
@@ -113,6 +120,7 @@ export class KanbanSurface implements ScreenUiCompositor {
   }
 
   private dirty(): void {
+    this.framePending = true;
     this.onChange?.(this.board);
   }
 
@@ -432,10 +440,23 @@ export class KanbanSurface implements ScreenUiCompositor {
     this.lastTickMs = nowMs;
     this.time += rdt;
     this.blinkT += rdt;
+    const phase = Math.floor(this.blinkT * 2);
+    if (phase !== this.blinkPhase) {
+      this.blinkPhase = phase;
+      if (this.wantsBlink()) this.ctx.requestFrame();
+    }
   }
 
   hasContent(): boolean {
     return this.active && this.cache.ready && !this.disposed;
+  }
+
+  /** Engine damage-gate poll (damageOnly): framePending covers mutations;
+   *  input/store-driven changes arrive already marked. */
+  takeDirty(): boolean {
+    const d = this.framePending || this.animating();
+    this.framePending = false;
+    return d;
   }
 
   /** No time-driven animations — card drags repaint on pointer events. */
@@ -443,7 +464,8 @@ export class KanbanSurface implements ScreenUiCompositor {
     return false;
   }
 
-  /** A blinking edit caret is visible — serviced at the idle cadence. */
+  /** A blinking edit caret is visible — blink flips mark a frame via
+   *  ctx.requestFrame() (see update). */
   wantsBlink(): boolean {
     return this.active && this.editing !== null && !this.disposed;
   }

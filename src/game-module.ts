@@ -45,6 +45,13 @@ export const gameModule: GameModule = {
       mode: "2d",
       clearColor: BG,
       enableTelemetry: true,
+      // Damage-driven frames: the rAF chain parks once no compositor reports
+      // dirty output — keepalive ticks frame hooks (our surfaces' tick()) at
+      // 4Hz so blink/animation producers can re-mark. Wakes come from the
+      // engine's input/resize marks plus FrameGovernor's store/textinput
+      // bridge and surfaces' own ctx.requestFrame() calls.
+      damageOnly: true,
+      damageIdleFps: 4,
     }),
 
   ui: (ctx) => {
@@ -91,14 +98,11 @@ export const gameModule: GameModule = {
         mctx.registerUiCompositor?.(board);
         mctx.registerUiCompositor?.(wb);
         mctx.registerUiCompositor?.(palette);
-        // Render-on-demand: the continuous rAF loop stops once nothing is
-        // animating (software rasterization makes idle frames expensive);
-        // wakes come from store changes, input, and the surfaces' own
-        // animating()/wantsBlink() reports.
-        governor = new FrameGovernor(mctx, renderer, () => [surf, board, wb, palette]);
+        // Wake bridge for the damageOnly gate: store changes + textinput +
+        // async loads mark frames the engine can't see itself.
+        governor = new FrameGovernor(mctx, renderer);
         mctx.onFrame("afterFrame", (dt) => {
           surf.tick(dt); board.update(dt); wb.update(dt); palette.update(dt);
-          governor?.noteFrame();
         });
         surf.setAnimationsEnabled(store.getState().editorAnimations);
         let lastTheme = store.getState().theme;

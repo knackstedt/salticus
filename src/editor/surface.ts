@@ -175,6 +175,8 @@ export class EditorSurface implements ScreenUiCompositor {
   private time = 0;
   private lastTickMs = 0;
   private textInputActive = false;
+  private blinkPhase = -1;
+  private lastAnim = false;
 
   // ── Context menu + block drag ─────────────────────────────────────────────
   private ctxMenu: CtxMenuState | null = null;
@@ -253,6 +255,7 @@ export class EditorSurface implements ScreenUiCompositor {
     if (this.active === a) return;
     this.active = a;
     if (!a) { this.focused = false; this.slash = null; this.toolbar = null; this.ctxMenu = null; this.blockDrag = null; this.hoverBlock = -1; }
+    this.dirty = true; // damage gate: the activation transition needs a frame
   }
 
   get isActive(): boolean {
@@ -1851,6 +1854,11 @@ export class EditorSurface implements ScreenUiCompositor {
     if (Math.abs(this.scrollTarget - this.scrollY) < 0.1) this.scrollY = this.scrollTarget;
     if (Math.abs(this.scrollTarget - this.scrollY) > 0.5) this.scrollActiveT = this.time;
     this.blinkT += rdt;
+    const phase = Math.floor(this.blinkT * 2);
+    if (phase !== this.blinkPhase) {
+      this.blinkPhase = phase;
+      if (this.wantsBlink()) this.ctx.requestFrame();
+    }
 
     if (this.flashAnim && this.time - this.flashAnim.t0 > FLASH_DUR) this.flashAnim = null;
     if (this.todoAnim && this.time - this.todoAnim.t0 > CHECK_DUR) this.todoAnim = null;
@@ -1913,6 +1921,18 @@ export class EditorSurface implements ScreenUiCompositor {
     return this.active && this.cache.ready && !this.disposed;
   }
 
+  /** Engine damage-gate poll (damageOnly). Content mutations set `dirty`
+   *  (relayout) — those double as frame marks; `animating()` covers
+   *  time-driven visuals, and `lastAnim` lands the settle frame after an
+   *  animation's final tick. Store/input/requestFrame-marked sources are
+   *  handled by the engine + governor bridge. */
+  takeDirty(): boolean {
+    const a = this.animating();
+    const d = this.dirty || a || this.lastAnim;
+    this.lastAnim = a;
+    return d;
+  }
+
   /** Time-driven visuals in flight — the frame governor holds the render
    *  loop awake until this clears. Caret blink is deliberately excluded
    *  (wantsBlink() services it at the idle cadence). */
@@ -1929,7 +1949,8 @@ export class EditorSurface implements ScreenUiCompositor {
     return false;
   }
 
-  /** A blinking caret is visible — serviced at ~2fps while the loop sleeps. */
+  /** A blinking caret is visible — blink phase flips mark a frame via
+   *  ctx.requestFrame() (see tick). */
   wantsBlink(): boolean {
     return this.active && this.focused && !this.disposed;
   }
