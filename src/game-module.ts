@@ -90,10 +90,11 @@ export const gameModule: GameModule = {
         editorSurface = surf;
         kanbanSurface = board;
         wbSurface = wb;
-        surf.setRect(store.getState().contentRect);
-        board.setRect(store.getState().contentRect);
-        wb.setRect(store.getState().contentRect);
-        palette.setRect(store.getState().contentRect);
+        const s0 = store.getState();
+        surf.setRect(s0.contentRect, s0.dpr);
+        board.setRect(s0.contentRect, s0.dpr);
+        wb.setRect(s0.contentRect, s0.dpr);
+        palette.setRect(s0.contentRect, s0.dpr);
         mctx.registerUiCompositor?.(surf);
         mctx.registerUiCompositor?.(board);
         mctx.registerUiCompositor?.(wb);
@@ -107,10 +108,10 @@ export const gameModule: GameModule = {
         surf.setAnimationsEnabled(store.getState().editorAnimations);
         let lastTheme = store.getState().theme;
         const unsub = store.subscribe((s) => {
-          surf.setRect(s.contentRect);
-          board.setRect(s.contentRect);
-          wb.setRect(s.contentRect);
-          palette.setRect(s.contentRect);
+          surf.setRect(s.contentRect, s.dpr);
+          board.setRect(s.contentRect, s.dpr);
+          wb.setRect(s.contentRect, s.dpr);
+          palette.setRect(s.contentRect, s.dpr);
           surf.setAnimationsEnabled(s.editorAnimations);
           if (s.theme !== lastTheme) {
             lastTheme = s.theme;

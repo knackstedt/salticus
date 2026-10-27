@@ -171,17 +171,21 @@ export class GpuTextPass {
 
   /** Record the batch into the open UI render pass. */
   render(pass: GPURenderPassEncoder, surfaceW: number, surfaceH: number,
-    atlas: TextAtlas, time: number): void {
+    atlas: TextAtlas, time: number, scale = 1): void {
     this.renderRanges(pass, surfaceW, surfaceH, atlas, time,
-      [{ start: 0, end: this.count }]);
+      [{ start: 0, end: this.count }], scale);
   }
 
   /** Record sub-ranges of the batch, each optionally scissor-clipped.
    *  Lets surfaces clip quad groups (e.g. kanban column scroll regions)
-   *  while keeping a single instance buffer. */
+   *  while keeping a single instance buffer. surfaceW/H are the render
+   *  target's physical px; `scale` is buffer-px-per-surface-px (display dpr)
+   *  — quads and range scissors are authored in logical px, scissors get
+   *  scaled up to physical px for setScissorRect. */
   renderRanges(pass: GPURenderPassEncoder, surfaceW: number, surfaceH: number,
     atlas: TextAtlas, time: number,
-    ranges: { start: number; end: number; scissor?: [number, number, number, number] }[]): void {
+    ranges: { start: number; end: number; scissor?: [number, number, number, number] }[],
+    scale = 1): void {
     if (this.count === 0) return;
     if (this.boundAtlas !== atlas) {
       this.boundAtlas = atlas;
@@ -199,7 +203,9 @@ export class GpuTextPass {
         ],
       });
     }
-    this.device.queue.writeBuffer(this.uniformBuf, 0, new Float32Array([surfaceW, surfaceH, time, 0]));
+    // The projection maps logical surface px → NDC; scissors are physical.
+    this.device.queue.writeBuffer(this.uniformBuf, 0,
+      new Float32Array([surfaceW / scale, surfaceH / scale, time, 0]));
     this.device.queue.writeBuffer(this.instanceBuf, 0, this.data, 0, this.count * FLOATS_PER_INSTANCE);
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, this.bindGroup);
@@ -207,11 +213,11 @@ export class GpuTextPass {
       if (r.end <= r.start) return;
       const clip = r.scissor;
       if (clip) {
-        const [sx, sy, sw, sh] = clip;
+        const px = clip[0] * scale, py = clip[1] * scale;
         pass.setScissorRect(
-          Math.max(0, Math.floor(sx)), Math.max(0, Math.floor(sy)),
-          Math.max(0, Math.min(surfaceW - sx, Math.ceil(sw))),
-          Math.max(0, Math.min(surfaceH - sy, Math.ceil(sh))));
+          Math.max(0, Math.floor(px)), Math.max(0, Math.floor(py)),
+          Math.max(0, Math.min(surfaceW - px, Math.ceil(clip[2] * scale))),
+          Math.max(0, Math.min(surfaceH - py, Math.ceil(clip[3] * scale))));
       }
       pass.draw(6, r.end - r.start, 0, r.start);
       if (clip) pass.setScissorRect(0, 0, surfaceW, surfaceH);

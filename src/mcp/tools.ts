@@ -69,6 +69,9 @@ export function gameMcpTools(_ctx: GameContext): McpToolRegistration[] {
           contentRect: s.contentRect,
           theme: s.theme,
           saveIndicator: s.saveIndicator,
+          dpr: s.dpr,
+          windowW: s.windowW,
+          windowH: s.windowH,
         });
       },
     },

@@ -201,9 +201,25 @@ export class WhiteboardSurface implements ScreenUiCompositor {
     this.framePending = true;
   }
 
-  setRect(r: { x: number; y: number; w: number; h: number }): void {
-    this.rect = r;
+  /** Buffer px per logical px — set by setRect; converts input + projection. */
+  private dpr = 1;
+
+  setRect(r: { x: number; y: number; w: number; h: number }, dpr = 1): void {
+    this.dpr = dpr;
+    // All surface math is logical px; the caller's rect is buffer px.
+    this.rect = { x: r.x / dpr, y: r.y / dpr, w: r.w / dpr, h: r.h / dpr };
     this.framePending = true;
+  }
+
+  /** Input events arrive in buffer px — convert to this surface's logical px. */
+  private loc<E extends object>(e: E): E {
+    const d = this.dpr;
+    if (d === 1) return e;
+    const c = { ...(e as Record<string, unknown>) };
+    ["clientX", "clientY", "deltaX", "deltaY", "dx", "dy"].forEach((k) => {
+      if (typeof c[k] === "number") c[k] = (c[k] as number) / d;
+    });
+    return c as E;
   }
 
   setContent(c: WbContent | null): void {
@@ -385,6 +401,7 @@ export class WhiteboardSurface implements ScreenUiCompositor {
       !!r && x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
 
     this.unsubs.push(bus.onPointerDown((e, ctrl) => {
+      e = this.loc(e);
       this.pointerHeld = true;
       if (!this.active) return;
       if (!inCanvas(e.clientX, e.clientY)) return;
@@ -602,6 +619,7 @@ export class WhiteboardSurface implements ScreenUiCompositor {
     }, 55));
 
     this.unsubs.push(bus.onPointerMove((e) => {
+      e = this.loc(e);
       this.cursor = { x: e.clientX, y: e.clientY };
       if (!this.active) return;
       if (this.menu) {
@@ -691,6 +709,7 @@ export class WhiteboardSurface implements ScreenUiCompositor {
     }));
 
     this.unsubs.push(bus.onPointerUp((e) => {
+      e = this.loc(e);
       this.pointerHeld = false;
       const d = this.draft;
       // Deferred double-click: a second press that never dragged edits the
@@ -835,6 +854,7 @@ export class WhiteboardSurface implements ScreenUiCompositor {
     }));
 
     this.unsubs.push(bus.onWheel((e, ctrl) => {
+      e = this.loc(e);
       if (!inCanvas(e.clientX, e.clientY)) return;
       ctrl.stopPropagation();
       const z = this.wb.cam.zoom;
@@ -2164,7 +2184,7 @@ export class WhiteboardSurface implements ScreenUiCompositor {
       ranges[ranges.length - 1]!.end = p.quadCount;
     }
 
-    p.renderRanges(pass, surfaceW, surfaceH, this.atlas, this.time, ranges);
+    p.renderRanges(pass, surfaceW, surfaceH, this.atlas, this.time, ranges, this.dpr);
   }
 
   /** Ghost line tracking the cursor while a multi-point element is open. */

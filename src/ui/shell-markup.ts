@@ -117,7 +117,7 @@ export function sidebarMarkup(s: AppState): string {
       </div>
       <div class="gn-grow"></div>`;
   return `
-    <div class="gn-col" style="height:${s.windowH}px;overflow:hidden">
+    <div class="gn-col" style="height:${Math.round(s.windowH / s.dpr)}px;overflow:hidden">
       <div class="gn-row" style="padding:12px 10px 6px;gap:8px">
         <div style="width:20px;height:20px;border-radius:5px;background:#8f7cf6;text-align:center;color:#fff;font-size:12px;line-height:20px;flex:none">G</div>
         <div class="gn-grow" style="font-weight:600;font-size:13px">Graphic Notes</div>
@@ -214,8 +214,8 @@ export function ctxMenuMarkup(s: AppState, pageId: string, kind: CtxMenuKind, x:
     add(sep, CTX_SEP);
     add(mi("ctx-trash", "Move to trash", { icon: "trash", danger: true }), CTX_ROW);
   }
-  const mx = Math.min(Math.max(4, x), Math.max(4, s.windowW - CTX_W - 4));
-  const my = Math.min(Math.max(4, y), Math.max(4, s.windowH - h - 4));
+  const mx = Math.min(Math.max(4, x), Math.max(4, s.windowW / s.dpr - CTX_W - 4));
+  const my = Math.min(Math.max(4, y), Math.max(4, s.windowH / s.dpr - h - 4));
   return `
     <div style="position:relative;width:100%;height:100%" data-action="ctx-dismiss">
       <div class="gn-menu" style="position:absolute;left:${mx}px;top:${my}px;width:${CTX_W}px">${items}</div>

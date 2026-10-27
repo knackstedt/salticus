@@ -103,9 +103,25 @@ export class KanbanSurface implements ScreenUiCompositor {
     this.framePending = true;
   }
 
-  setRect(r: { x: number; y: number; w: number; h: number }): void {
-    this.rect = r;
+  /** Buffer px per logical px — set by setRect; converts input + projection. */
+  private dpr = 1;
+
+  setRect(r: { x: number; y: number; w: number; h: number }, dpr = 1): void {
+    this.dpr = dpr;
+    // All surface math is logical px; the caller's rect is buffer px.
+    this.rect = { x: r.x / dpr, y: r.y / dpr, w: r.w / dpr, h: r.h / dpr };
     this.framePending = true;
+  }
+
+  /** Input events arrive in buffer px — convert to this surface's logical px. */
+  private loc<E extends object>(e: E): E {
+    const d = this.dpr;
+    if (d === 1) return e;
+    const c = { ...(e as Record<string, unknown>) };
+    ["clientX", "clientY", "deltaX", "deltaY", "dx", "dy"].forEach((k) => {
+      if (typeof c[k] === "number") c[k] = (c[k] as number) / d;
+    });
+    return c as E;
   }
 
   setBoard(b: BoardContent | null): void {
@@ -226,6 +242,7 @@ export class KanbanSurface implements ScreenUiCompositor {
       x <= this.rect.x + this.rect.w && y <= this.rect.y + this.rect.h;
 
     this.unsubs.push(bus.onPointerDown((e, ctrl) => {
+      e = this.loc(e);
       if (!inRect(e.clientX, e.clientY)) return;
       ctrl.stopPropagation();
       const x = e.clientX, y = e.clientY;
@@ -278,6 +295,7 @@ export class KanbanSurface implements ScreenUiCompositor {
     }, 55));
 
     this.unsubs.push(bus.onPointerMove((e) => {
+      e = this.loc(e);
       if (!this.active) return;
       if (this.drag) {
         const d = this.drag;
@@ -324,6 +342,7 @@ export class KanbanSurface implements ScreenUiCompositor {
     }));
 
     this.unsubs.push(bus.onWheel((e, ctrl) => {
+      e = this.loc(e);
       if (!inRect(e.clientX, e.clientY)) return;
       ctrl.stopPropagation();
       const ci = this.hitColumn(e.clientX);
@@ -610,7 +629,7 @@ export class KanbanSurface implements ScreenUiCompositor {
     }
 
     for (const r of ranges) if (r.end < 0) r.end = p.quadCount;
-    p.renderRanges(pass, surfaceW, surfaceH, this.atlas, this.time, ranges);
+    p.renderRanges(pass, surfaceW, surfaceH, this.atlas, this.time, ranges, this.dpr);
   }
 
   private pageTitle(): string {

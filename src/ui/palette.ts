@@ -67,8 +67,13 @@ export class PaletteSurface implements ScreenUiCompositor {
     return store.getState().paletteOpen;
   }
 
-  setRect(r: { x: number; y: number; w: number; h: number }): void {
-    this.rect = r;
+  /** Buffer px per logical px — set by setRect; converts input + projection. */
+  private dpr = 1;
+
+  setRect(r: { x: number; y: number; w: number; h: number }, dpr = 1): void {
+    this.dpr = dpr;
+    // All surface math is logical px; the caller's rect is buffer px.
+    this.rect = { x: r.x / dpr, y: r.y / dpr, w: r.w / dpr, h: r.h / dpr };
     this.framePending = true;
   }
 
@@ -131,13 +136,16 @@ export class PaletteSurface implements ScreenUiCompositor {
     this.unsubs.push(bus.onPointerDown((e, ctrl) => {
       if (!this.open) return;
       ctrl.stopPropagation();
+      const d = this.dpr;
+      // Bounds live in the surface's logical px; events arrive in buffer px.
+      const ex = e.clientX / d, ey = e.clientY / d;
       const b = this.bounds;
-      if (e.clientX < b.x || e.clientX > b.x + b.w || e.clientY < b.y || e.clientY > b.y + b.h) {
+      if (ex < b.x || ex > b.x + b.w || ey < b.y || ey > b.y + b.h) {
         this.setOpen(false);
         return;
       }
       // Row click.
-      const rowIdx = Math.floor((e.clientY - (b.y + 56)) / ROW_H);
+      const rowIdx = Math.floor((ey - (b.y + 56)) / ROW_H);
       if (rowIdx >= 0 && rowIdx < Math.min(this.rows.length, MAX_ROWS)) {
         const r = this.rows[rowIdx];
         this.setOpen(false);
@@ -213,8 +221,8 @@ export class PaletteSurface implements ScreenUiCompositor {
     const t = tokens(store.getState().theme);
     p.begin();
 
-    // Backdrop.
-    p.rect(0, 0, surfaceW, surfaceH, [0, 0, 0, 0.42]);
+    // Backdrop — the pass is fed logical px (surfaceW/dpr covers the surface).
+    p.rect(0, 0, surfaceW / this.dpr, surfaceH / this.dpr, [0, 0, 0, 0.42]);
 
     const px = this.rect.x + (this.rect.w - PANEL_W) / 2;
     const py = this.rect.y + Math.max(40, this.rect.h * 0.18);
@@ -263,7 +271,7 @@ export class PaletteSurface implements ScreenUiCompositor {
       ry += ROW_H;
     }
 
-    p.render(pass, surfaceW, surfaceH, this.atlas, this.blinkT);
+    p.render(pass, surfaceW, surfaceH, this.atlas, this.blinkT, this.dpr);
   }
 
   dispose(): void {

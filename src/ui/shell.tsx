@@ -81,12 +81,16 @@ export function mountShell(ui: HtmlUiContext, ctx: GameContext): ShellHandles {
   const s0 = store.getState();
   const W = ctx.surface.width;
   const H = ctx.surface.height;
+  // Buffer px per CSS px — panels get zoom=dpr so doc CSS px are logical px,
+  // and chrome rect dims scale up to stay logical-sized.
+  const dpr0 = ctx.surface.clientWidth > 0 ? ctx.surface.width / ctx.surface.clientWidth : 1;
   const sw = s0.sidebarWidth;
   const th = s0.topbarHeight;
   store.setState({
     windowW: W,
     windowH: H,
-    contentRect: { x: sw, y: th, w: W - sw, h: H - th },
+    dpr: dpr0,
+    contentRect: { x: sw * dpr0, y: th * dpr0, w: W - sw * dpr0, h: H - th * dpr0 },
   });
 
   let fontFaces = "";
@@ -104,20 +108,24 @@ export function mountShell(ui: HtmlUiContext, ctx: GameContext): ShellHandles {
 
   const sidebar = ui.mount(
     wrap(pageCss(t, fontFaces) + sidebarMarkup(st), "sidebar"),
-    { id: "sidebar", rect: { x: 0, y: 0, w: sw, h: H }, z: 10, scale: 2, smoothWheel: true },
+    { id: "sidebar", rect: { x: 0, y: 0, w: sw * dpr0, h: H }, z: 10, scale: 2, zoom: dpr0, smoothWheel: true },
   );
   const topbar = ui.mount(
     wrap(pageCss(t, fontFaces) + topbarMarkup(st), "topbar"),
-    { id: "topbar", rect: { x: sw, y: 0, w: W - sw, h: th }, z: 10, scale: 2 },
+    { id: "topbar", rect: { x: sw * dpr0, y: 0, w: W - sw * dpr0, h: th * dpr0 }, z: 10, scale: 2, zoom: dpr0 },
   );
 
   function layout() {
     const s = store.getState();
-    const w = s.windowW, h = s.windowH;
-    sidebar.setRect({ x: 0, y: 0, w: s.sidebarWidth, h });
-    topbar.setRect({ x: s.sidebarWidth, y: 0, w: w - s.sidebarWidth, h: s.topbarHeight });
+    const w = s.windowW, h = s.windowH, d = s.dpr;
+    // Panel rects are buffer px — sidebarWidth/topbarHeight are logical px.
+    sidebar.setRect({ x: 0, y: 0, w: s.sidebarWidth * d, h }, d);
+    topbar.setRect({ x: s.sidebarWidth * d, y: 0, w: w - s.sidebarWidth * d, h: s.topbarHeight * d }, d);
     store.setState({
-      contentRect: { x: s.sidebarWidth, y: s.topbarHeight, w: w - s.sidebarWidth, h: h - s.topbarHeight },
+      contentRect: {
+        x: s.sidebarWidth * d, y: s.topbarHeight * d,
+        w: w - s.sidebarWidth * d, h: h - s.topbarHeight * d,
+      },
     });
   }
 
@@ -145,7 +153,7 @@ export function mountShell(ui: HtmlUiContext, ctx: GameContext): ShellHandles {
     // only the .gn-menu card itself paints (its backdrop is event-only).
     menu = ui.mount(
       `<div class="gn-col" style="width:100%;height:100%">${pageCss(tokens(s.theme), fontFaces)}${ctxMenuMarkup(s, pageId, kind, sx, sy)}</div>`,
-      { id: "ctxmenu", rect: { x: 0, y: 0, w: s.windowW, h: s.windowH }, z: 60, scale: 2 },
+      { id: "ctxmenu", rect: { x: 0, y: 0, w: s.windowW, h: s.windowH }, z: 60, scale: 2, zoom: s.dpr },
     );
     menu.onEvent((ev) => {
       if (ev.t === "contextmenu" || (ev.t === "keydown" && ev.k === "Escape")) closeCtxMenu();
@@ -166,7 +174,9 @@ export function mountShell(ui: HtmlUiContext, ctx: GameContext): ShellHandles {
     if (ev.t === "contextmenu") {
       const kind = ev.d?.menu as CtxMenuKind | undefined;
       if (kind && ev.d?.id && s.pages[ev.d.id]) {
-        openCtxMenu(ev.d.id, kind, panel.rect.x + (ev.x ?? 0), panel.rect.y + (ev.y ?? 0));
+        // ev.x/y are doc-space (logical px); panel.rect is buffer px — the
+        // menu doc is logical px too, so convert the origin, not the event.
+        openCtxMenu(ev.d.id, kind, panel.rect.x / s.dpr + (ev.x ?? 0), panel.rect.y / s.dpr + (ev.y ?? 0));
       }
       return;
     }

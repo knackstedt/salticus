@@ -262,10 +262,28 @@ export class EditorSurface implements ScreenUiCompositor {
     return this.active;
   }
 
-  setRect(r: EditorRect): void {
-    if (r.x === this.rect.x && r.y === this.rect.y && r.w === this.rect.w && r.h === this.rect.h) return;
-    this.rect = r;
+  /** Buffer px per logical px — set by setRect; converts input + projection. */
+  private dpr = 1;
+
+  setRect(r: EditorRect, dpr = 1): void {
+    this.dpr = dpr;
+    // All surface math is logical px; the caller's rect is buffer px.
+    const lr = { x: r.x / dpr, y: r.y / dpr, w: r.w / dpr, h: r.h / dpr };
+    if (lr.x === this.rect.x && lr.y === this.rect.y &&
+      lr.w === this.rect.w && lr.h === this.rect.h) return;
+    this.rect = lr;
     this.dirty = true;
+  }
+
+  /** Input events arrive in buffer px — convert to this surface's logical px. */
+  private loc<E extends object>(e: E): E {
+    const d = this.dpr;
+    if (d === 1) return e;
+    const c = { ...(e as Record<string, unknown>) };
+    ["clientX", "clientY", "deltaX", "deltaY", "dx", "dy"].forEach((k) => {
+      if (typeof c[k] === "number") c[k] = (c[k] as number) / d;
+    });
+    return c as E;
   }
 
   setDoc(doc: Doc): void {
@@ -359,6 +377,7 @@ export class EditorSurface implements ScreenUiCompositor {
       y >= this.rect.y && y <= this.rect.y + this.rect.h;
 
     this.unsubs.push(bus.onPointerDown((e, ctrl) => {
+      e = this.loc(e);
       this.scrollDrag = false;
       // Context menu eats its own clicks first.
       if (this.ctxMenu) {
@@ -495,6 +514,7 @@ export class EditorSurface implements ScreenUiCompositor {
     }, 50));
 
     this.unsubs.push(bus.onPointerMove((e, ctrl) => {
+      e = this.loc(e);
       if (this.blockDrag) {
         ctrl.stopPropagation();
         this.dragX = e.clientX;
@@ -567,6 +587,7 @@ export class EditorSurface implements ScreenUiCompositor {
     }, 50));
 
     this.unsubs.push(bus.onWheel((e, ctrl) => {
+      e = this.loc(e);
       if (!inRect(e.clientX, e.clientY)) return;
       ctrl.stopPropagation();
       this.scrollTarget = clamp(this.scrollTarget + e.deltaY, 0, this.maxScroll());
@@ -1962,7 +1983,7 @@ export class EditorSurface implements ScreenUiCompositor {
     p.begin();
     p.rect(this.rect.x, this.rect.y, this.rect.w, this.rect.h, t.bg);
     if (!this.layout) {
-      p.render(pass, surfaceW, surfaceH, this.atlas, this.time);
+      p.render(pass, surfaceW, surfaceH, this.atlas, this.time, this.dpr);
       return;
     }
 
@@ -2083,7 +2104,7 @@ export class EditorSurface implements ScreenUiCompositor {
       { start: 0, end: bodyStart },
       { start: bodyStart, end: bodyEnd, scissor: [this.rect.x, clipY, this.rect.w, this.rect.y + this.rect.h - clipY] },
       { start: bodyEnd, end: p.quadCount },
-    ]);
+    ], this.dpr);
   }
 
   /** Draw one laid segment's text slice plus its underline/strike marks. */

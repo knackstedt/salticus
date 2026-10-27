@@ -31,8 +31,13 @@ async function key(k: string, mods: Record<string, unknown> = {}): Promise<void>
   await mcp("dispatch_key", { key: k, ...mods });
 }
 
+// Click coords below are authored in logical (CSS-space) px — the same space
+// wb_state's screen coords report. dispatch_click takes buffer px, so scale
+// by the display's devicePixelRatio (app_state.dpr).
+let DPR = 1;
+
 async function click(x: number, y: number, type = "click"): Promise<void> {
-  await mcp("dispatch_click", { x, y, type });
+  await mcp("dispatch_click", { x: x * DPR, y: y * DPR, type });
 }
 
 async function check(name: string, fn: () => Promise<void> | void): Promise<void> {
@@ -52,6 +57,7 @@ function assert(cond: unknown, msg: string): void {
 console.log("smoke: driving running instance via MCP");
 
 const state = await mcp("app_state");
+DPR = typeof state.dpr === "number" && state.dpr > 0 ? state.dpr : 1;
 assert(state.pages && Object.keys(state.pages as object).length > 0, "workspace has pages");
 console.log(`  workspace: ${Object.keys(state.pages as object).length} pages, active=${state.activePageId}`);
 
