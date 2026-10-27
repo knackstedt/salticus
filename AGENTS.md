@@ -38,48 +38,27 @@
   or indexed `for`).
 - No Devin co-author trailer in commits.
 
-## Locally rebuilt platform native lib (RTL text + ctrl-chord textinput)
+## Upstream fixes absorbed in 0.9.0
 
-`node_modules/@downdraft/native-linux-x64/lib/libdowndraft_platform.so` is a
-**locally built 0.8.0 + two fixes**, not the shipped one:
+Two fixes that previously required a locally rebuilt
+`libdowndraft_platform.so` / patched package JS shipped upstream in 0.9.0 —
+a plain `bun install` is now correct, no repatching needed:
 
-1. **RTL**: `ft_shim_render_text` measured text at `f32::MAX` buffer width,
-   so cosmic-text anchored RTL runs at x≈line_w (~3e38) and all
-   Hebrew/Arabic ink clipped to nothing. The fix re-layouts the buffer at
-   the measured advance before drawing — committed upstream as
-   `downdraft-engine@a5810f65` (`native-rs/src/text.rs`), ships in >0.8.0.
+1. **RTL text**: `ft_shim_render_text` re-layouts at the measured advance
+   (`downdraft-engine@a5810f65`, `native-rs/src/text.rs`) — fixed RTL runs
+   anchoring at x≈3e38 and clipping to nothing.
 2. **Ctrl-chord textinput**: `translate_window_event`
-   (`native-rs/src/window/events.rs`) forwarded `event.text` for every
-   keydown while text input was enabled — on X11 Ctrl+A delivers "a", so
-   any Ctrl/Cmd chord (select-all, bold, undo…) also inserted the char and
-   replaced the live selection (Ctrl+A wiped the doc). The event now gates
-   on modifiers: GUI always suppresses, CTRL suppresses unless ALT is also
-   held (Ctrl+Alt = AltGr on Windows). **Not yet committed upstream** — the
-   change sits uncommitted in the downdraft-engine working tree.
+   (`native-rs/src/window/events.rs`) gates `event.text` on modifiers
+   (`chorded` check) — Ctrl/Cmd chords no longer insert chars over the
+   live selection.
+3. **iconPath**: `runNativeAppModule` (the 0.9.0 rename of
+   `runNativeGameModule`) accepts `iconPath` natively — `_NET_WM_ICON` /
+   taskbar icon works from stock packages.
 
-Until both ship upstream, a `bun install` / package refetch reverts the
-local .so — rebuild with `cd
-~/Pivot/source/apophis/downdraft-engine/packages/platform-native && bun run
-build:native` and copy `native/linux-x64/libdowndraft_platform.so` into
-`node_modules/@downdraft/native-linux-x64/lib/`.
-
-## Patched npm package JS (iconPath forward)
-
-`runNativeGameModule` in **0.8.0 does not accept `iconPath`** — the window
-gets WM_CLASS/app_id (taskbar grouping) but never `_NET_WM_ICON`, so dev
-windows show a generic taskbar icon. Patched locally:
-
-- `node_modules/@downdraft/platform-native/src/native-game-module.ts` —
-  `iconPath?: string` on `RunNativeGameModuleOptions`, forwarded into the
-  `createNativeHost` window config.
-- `node_modules/@downdraft/platform-native/dist/src/native-game-module.js`
-  — same forward in the compiled copy.
-
-A reinstall wipes both — reapply, or use the engine checkout where the
-same option was added to `runNativeAppModule`
-(`packages/platform-native/src/native-app-module.ts`, uncommitted).
-Verify with `xprop _NET_WM_ICON` on the live window — MCP screenshots
-never show WM/taskbar state.
+If a future upgrade regresses these, the rebuild recipe is
+`cd ~/Pivot/source/apophis/downdraft-engine/packages/platform-native &&
+bun run build:native` then copy `native/linux-x64/libdowndraft_platform.so`
+into `node_modules/@downdraft/native-linux-x64/lib/`.
 
 ## Render-on-demand (frame governor)
 

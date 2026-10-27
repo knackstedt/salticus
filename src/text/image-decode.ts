@@ -4,7 +4,7 @@
 // PNG strikes into RGBA pixels, and by the whiteboard image assets.
 // ============================================================================
 
-import { dlopen, ptr, resolvePlatformLibrary } from "@downdraft/platform-native";
+import { dlopen, ptr, resolvePlatformLibrary, type CFunction, type ptr as Ptr } from "@downdraft/platform-native";
 import { createLogger } from "@downdraft/engine/util/logger";
 
 const log = createLogger();
@@ -15,8 +15,8 @@ const IMG_SPEC = {
 } as const;
 
 type ImgSymbols = {
-  image_shim_decode: (...args: never[]) => number;
-  image_shim_info: (...args: never[]) => number;
+  image_shim_decode: (inPtr: Ptr, inLen: number, outPtr: Ptr, outLen: number, wOut: Ptr, hOut: Ptr, chOut: Ptr) => number;
+  image_shim_info: (inPtr: Ptr, inLen: number, wOut: Ptr, hOut: Ptr, chOut: Ptr) => number;
 };
 
 export interface DecodedImage {
@@ -42,7 +42,7 @@ export class ImageDecoder {
   constructor() {
     try {
       const libPath = resolvePlatformLibrary(true);
-      if (libPath) this.symbols = dlopen(libPath, IMG_SPEC).symbols as unknown as ImgSymbols;
+      if (libPath) this.symbols = dlopen(libPath, IMG_SPEC as unknown as Record<string, CFunction>).symbols as unknown as ImgSymbols;
     } catch (e) {
       log.warn("image-decode", `platform dlopen failed: ${e}`);
     }
@@ -58,8 +58,8 @@ export class ImageDecoder {
     if (inBuf.length < png.length) inBuf = new Uint8Array(png.length);
     inBuf.set(png);
     const rc = this.symbols.image_shim_info(
-      ptr(inBuf) as never, png.length,
-      ptr(DIMENS()) as never, ptr(DIMENS(1)) as never, ptr(DIMENS(2)) as never,
+      ptr(inBuf), png.length,
+      ptr(DIMENS()), ptr(DIMENS(1)), ptr(DIMENS(2)),
     );
     if (rc !== 0) return null;
     const [w, h, ch] = [DIMS[0]!, DIMS[1]!, DIMS[2]!];
@@ -74,9 +74,9 @@ export class ImageDecoder {
     const need = d.width * d.height * 4;
     if (outBuf.length < need) outBuf = new Uint8Array(need);
     const rc = this.symbols.image_shim_decode(
-      ptr(inBuf) as never, png.length,
-      ptr(outBuf) as never, outBuf.length,
-      ptr(DIMENS()) as never, ptr(DIMENS(1)) as never, ptr(DIMENS(2)) as never,
+      ptr(inBuf), png.length,
+      ptr(outBuf), outBuf.length,
+      ptr(DIMENS()), ptr(DIMENS(1)), ptr(DIMENS(2)),
     );
     if (rc !== 0) return null;
     const [w, h, ch] = [DIMS[0]!, DIMS[1]!, DIMS[2]!];

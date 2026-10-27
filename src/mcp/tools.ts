@@ -4,14 +4,14 @@
 // Registered via createGameMcp({ tools }).
 // ============================================================================
 
-import type { GameContext } from "@downdraft/engine/app/main";
+import type { AppContext } from "@downdraft/engine/app/main";
 import { jsonResult, type McpToolRegistration } from "@downdraft/engine/app/main/mcp-harness";
 import { store } from "../app/store";
 import { createPage, deletePage, destroyPage, openPage, renamePage } from "../app/actions";
 import { editorSurface, wbSurface } from "../game-module";
 import { FALLBACK_FACES } from "../text/fonts";
 
-export function gameMcpTools(_ctx: GameContext): McpToolRegistration[] {
+export function gameMcpTools(_ctx: AppContext): McpToolRegistration[] {
   return [
     {
       def: {

@@ -92,12 +92,12 @@ export class PaletteSurface implements ScreenUiCompositor {
       run: () => openPage(h.pageId),
     }));
     const q = this.query.toLowerCase();
-    const cmds: PaletteRow[] = [
+    const cmds: PaletteRow[] = ([
       { kind: "command", label: "New document", sub: null, iconType: "doc", run: () => createPage({ type: "doc" }) },
       { kind: "command", label: "New board", sub: null, iconType: "board", run: () => createPage({ type: "board" }) },
       { kind: "command", label: "New whiteboard", sub: null, iconType: "whiteboard", run: () => createPage({ type: "whiteboard" }) },
       { kind: "command", label: "Toggle theme", sub: null, iconType: "cmd", run: () => store.setState((s) => ({ theme: s.theme === "dark" ? "light" : "dark" })) },
-    ].filter((c) => !q || c.label.toLowerCase().includes(q));
+    ] as PaletteRow[]).filter((c) => !q || c.label.toLowerCase().includes(q));
     this.rows = [...rows.slice(0, MAX_ROWS - 2), ...cmds];
     if (this.sel >= this.rows.length) this.sel = Math.max(0, this.rows.length - 1);
     this.framePending = true;

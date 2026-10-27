@@ -10,7 +10,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { HtmlUiContext, OsrDomEvent, UiPanelHandle } from "@downdraft/engine/modules/html-ui";
-import type { GameContext } from "@downdraft/engine/app/main";
+import type { AppContext } from "@downdraft/engine/app/main";
 import { createLogger } from "@downdraft/engine/util/logger";
 import { store } from "../app/store";
 import { closeAllTabs, closeOtherTabs, closeTab, createPage, deletePage, destroyPage, duplicatePage, openPage, renamePage, restorePage, toggleExpanded, toggleFavorite } from "../app/actions";
@@ -77,7 +77,7 @@ function clipboardSet(text: string): void {
   try { nw?.setClipboardText?.(text); } catch (e) { log.warn("ui", `clipboard set failed: ${e}`); }
 }
 
-export function mountShell(ui: HtmlUiContext, ctx: GameContext): ShellHandles {
+export function mountShell(ui: HtmlUiContext, ctx: AppContext): ShellHandles {
   const s0 = store.getState();
   const W = ctx.surface.width;
   const H = ctx.surface.height;

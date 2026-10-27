@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify the tag points at a commit on main
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Tag $GITHUB_REF_NAME is not on main — refusing to release."
+            exit 1
+          fi
+
+      - name: Verify tag matches package.json version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(jq -r .version package.json)"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME but package.json is $pkg — bump the version before tagging."
+            exit 1
+          fi
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Build (linux, win, mac)
+        run: bun run build
+
+      - name: Package artifacts
+        working-directory: release
+        run: |
+          tar -czf salticus-linux.tar.gz salticus-linux-bun
+          tar -czf salticus-mac.tar.gz salticus-mac
+          zip -qr salticus-win.zip salticus-win
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "$GITHUB_REF_NAME"
+          --title "Salticus $GITHUB_REF_NAME"
+          --generate-notes
+          release/salticus-linux.tar.gz
+          release/salticus-mac.tar.gz
+          release/salticus-win.zip

@@ -1,8 +1,8 @@
-import { GameRenderer } from "@downdraft/engine";
-import type { GameModule } from "@downdraft/engine/app/main";
+import { AppRenderer } from "@downdraft/engine";
+import type { AppModule } from "@downdraft/engine/app/main";
 import type { RendererModule } from "@downdraft/engine/module/renderer-module";
 import { createHtmlUi } from "@downdraft/engine/modules/html-ui";
-import { createGameMcp } from "@downdraft/engine/app/main";
+import { createAppMcp } from "@downdraft/engine/app/main";
 import { createLogger } from "@downdraft/engine/util/logger";
 import { mountShell } from "./ui/shell";
 import { store } from "./app/store";
@@ -39,9 +39,9 @@ let governor: FrameGovernor | null = null;
 
 const BG = { r: 0x1b / 255, g: 0x1b / 255, b: 0x1b / 255, a: 1 };
 
-export const gameModule: GameModule = {
+export const gameModule: AppModule = {
   renderer: (surface) =>
-    new GameRenderer(surface, {
+    new AppRenderer(surface, {
       mode: "2d",
       clearColor: BG,
       enableTelemetry: true,
@@ -55,7 +55,7 @@ export const gameModule: GameModule = {
     }),
 
   ui: (ctx) => {
-    const renderer = ctx.renderer as GameRenderer;
+    const renderer = ctx.renderer as AppRenderer;
     renderer.setViewportCount(0);
 
     // Workspace metadata must be loaded before the shell builds its lists.
@@ -159,8 +159,8 @@ export const gameModule: GameModule = {
   },
 
   mcp: (ctx) => {
-    const renderer = ctx.renderer as GameRenderer;
-    createGameMcp({
+    const renderer = ctx.renderer as AppRenderer;
+    createAppMcp({
       appId: "downdraft-salticus",
       surface: ctx.surface,
       isRunning: () => renderer.isRunning?.() ?? true,

@@ -14,7 +14,7 @@
 //   ft_shim_done(h)                               → void
 // ============================================================================
 
-import { dlopen, ptr, resolvePlatformLibrary } from "@downdraft/platform-native";
+import { dlopen, ptr, resolvePlatformLibrary, type CFunction, type ptr as Ptr } from "@downdraft/platform-native";
 import { createLogger } from "@downdraft/engine/util/logger";
 
 const log = createLogger();
@@ -29,7 +29,16 @@ const FT_SPEC = {
   ft_shim_done: { args: ["i64"], returns: "void" },
 } as const;
 
-type FtSymbols = Record<keyof typeof FT_SPEC, (...args: never[]) => number | bigint | void>;
+type FtSymbols = {
+  ft_shim_init: (fontPath: string) => bigint;
+  ft_shim_render_text: (
+    h: bigint, text: string, size: number,
+    out: Ptr, outSize: number, maxW: number, maxH: number,
+    wOut: Ptr, hOut: Ptr,
+  ) => number;
+  ft_shim_measure: (h: bigint, text: string, size: number) => number;
+  ft_shim_done: (h: bigint) => void;
+};
 
 export interface FtRunBitmap {
   /** Premultiplied coverage RGBA — every texel is (cov,cov,cov,cov). */
@@ -54,7 +63,7 @@ export class FtRasterizer {
         log.warn("ft", "platform library not found — text rasterization unavailable");
         return;
       }
-      this.symbols = dlopen(libPath, FT_SPEC).symbols as unknown as FtSymbols;
+      this.symbols = dlopen(libPath, FT_SPEC as unknown as Record<string, CFunction>).symbols as unknown as FtSymbols;
     } catch (e) {
       log.warn("ft", `platform dlopen failed: ${e}`);
     }
@@ -69,7 +78,7 @@ export class FtRasterizer {
     const existing = this.faces.get(path);
     if (existing !== undefined) return existing;
     if (!this.symbols) return 0n;
-    const h = this.symbols.ft_shim_init(path) as unknown as bigint;
+    const h = this.symbols.ft_shim_init(path);
     if (h === 0n) {
       log.warn("ft", `ft_shim_init failed for ${path}`);
     } else {
@@ -87,10 +96,10 @@ export class FtRasterizer {
     if (!this.symbols || handle === 0n || !text) return null;
     const n = this.symbols.ft_shim_render_text(
       handle, text, Math.max(1, Math.round(sizePx)),
-      ptr(RENDER_BUF) as never, RENDER_BUF.length,
+      ptr(RENDER_BUF), RENDER_BUF.length,
       MAX_W, MAX_H,
-      ptr(DIMS_OUT) as never, ptr(DIMS_OUT.subarray(1)) as never,
-    ) as unknown as number;
+      ptr(DIMS_OUT), ptr(DIMS_OUT.subarray(1)),
+    );
     if (n <= 0) return null; // empty raster (e.g. pure whitespace) is valid
     let w = DIMS_OUT[0]!;
     const h = DIMS_OUT[1]!;
@@ -113,13 +122,13 @@ export class FtRasterizer {
   /** Advance width of a run at pixel size (-1 on failure). */
   measure(handle: bigint, text: string, sizePx: number): number {
     if (!this.symbols || handle === 0n || !text) return -1;
-    return this.symbols.ft_shim_measure(handle, text, Math.max(1, Math.round(sizePx))) as unknown as number;
+    return this.symbols.ft_shim_measure(handle, text, Math.max(1, Math.round(sizePx)));
   }
 
   dispose(): void {
     if (!this.symbols) return;
     this.faces.forEach((h) => {
-      try { this.symbols!.ft_shim_done(h as never); } catch { /* shutdown */ }
+      try { this.symbols!.ft_shim_done(h); } catch { /* shutdown */ }
     });
     this.faces.clear();
   }

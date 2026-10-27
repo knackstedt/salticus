@@ -221,6 +221,7 @@ export class EditorSurface implements ScreenUiCompositor {
   /** Flat segment dump for MCP debugging: line index, x, face, drawn text. */
   layoutDebug(): { line: number; x: number; face: string; text: string }[] {
     const out: { line: number; x: number; face: string; text: string }[] = [];
+    if (!this.layout) return out;
     this.layout.lines.forEach((line, li) => {
       line.segments.forEach(seg => {
         out.push({ line: li, x: seg.x, face: seg.faceKey, text: seg.runText.slice(seg.start, seg.end) });
@@ -1349,8 +1350,9 @@ export class EditorSurface implements ScreenUiCompositor {
       return;
     }
     this.mutate("format");
-    const a = docCompare(this.anchor, this.caret) <= 0 ? this.anchor : this.caret;
-    const b = docCompare(this.anchor, this.caret) <= 0 ? this.caret : this.anchor;
+    const anchor = this.anchor!;
+    const a = docCompare(anchor, this.caret) <= 0 ? anchor : this.caret;
+    const b = docCompare(anchor, this.caret) <= 0 ? this.caret : anchor;
     // One decision for the whole selection — per-block toggling produced
     // inside-out results when blocks disagreed (one bold, one plain).
     let all = true, seen = false;

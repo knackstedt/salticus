@@ -24,7 +24,7 @@
 // removed; blink flips mark normal frames via ctx.requestFrame().
 // ============================================================================
 
-import type { GameRenderer } from "@downdraft/engine";
+import type { AppRenderer } from "@downdraft/engine";
 import type { RendererModuleContext } from "@downdraft/engine/module/renderer-module";
 import { store } from "./store";
 
@@ -48,7 +48,7 @@ export class FrameGovernor {
 
   constructor(
     private mctx: RendererModuleContext,
-    private renderer: GameRenderer,
+    private renderer: AppRenderer,
   ) {
     this.unsubs.push(store.subscribe(() => this.wake()));
 
