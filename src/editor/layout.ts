@@ -178,6 +178,33 @@ export class DocLayouter {
         x += width;
       };
 
+      // Whitespace is inkless but still needs caret positions — lay it like
+      // any other run, splitting at the wrap boundary so a trailing space run
+      // can't push the caret off the right edge (and a space before a wrapped
+      // word keeps its segment instead of being dropped).
+      const pushSpace = (tok: Token) => {
+        const r = runs[tok.spanIdx]!;
+        const co = r.shape!.clusterOffsets;
+        let s = tok.start;
+        for (let i = tok.start; i < tok.end; i++) {
+          // Does the pending whitespace slice s..i still fit on this line?
+          // (s < i covers lines holding only whitespace so far — flushing an
+          // empty line is meaningless, but a pending slice can always wrap.)
+          if (x + Math.abs(co[i + 1]! - co[s]!) > indent + avail && (segs.length > 0 || s < i)) {
+            if (s < i) {
+              const w = Math.abs(co[i]! - co[s]!);
+              push(tok, s, i, w, tok.blockOff + (s - tok.start));
+            }
+            flush(tok.blockOff + (i - tok.start));
+            s = i;
+          }
+        }
+        if (s < tok.end) {
+          const w = Math.abs(co[tok.end]! - co[s]!);
+          push(tok, s, tok.end, w, tok.blockOff + (s - tok.start));
+        }
+      };
+
       const textLen = blockText(block).length;
       for (let ti = 0; ti < tokens.length; ti++) {
         const tok = tokens[ti]!;
@@ -188,6 +215,11 @@ export class DocLayouter {
         if (tok.space) {
           pendingSpace = tok;
           continue;
+        }
+        if (pendingSpace) {
+          const ps = pendingSpace;
+          pendingSpace = null;
+          pushSpace(ps);
         }
         if (x + tok.width > indent + avail && segs.length > 0) {
           if (tok.width <= avail) {
@@ -211,20 +243,15 @@ export class DocLayouter {
             continue;
           }
         }
-        if (pendingSpace) {
-          const w = pendingSpace.width;
-          push(pendingSpace, pendingSpace.start, pendingSpace.end, w, pendingSpace.blockOff);
-          pendingSpace = null;
-        }
         push(tok, tok.start, tok.end, tok.width, tok.blockOff);
       }
       // Trailing whitespace has no glyph but still advances the caret — lay
-      // it so caret/hit math can place the caret past the space. (Spaces at
-      // a wrap boundary are dropped by flush, which is what we want.)
+      // it (wrapping like any run) so caret/hit math can place the caret
+      // past the space.
       if (pendingSpace) {
         const ps = pendingSpace;
-        push(ps, ps.start, ps.end, ps.width, ps.blockOff);
         pendingSpace = null;
+        pushSpace(ps);
       }
       if (segs.length > 0) {
         flush(textLen);
