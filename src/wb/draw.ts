@@ -10,7 +10,7 @@
 import type { GpuTextPass, Rgba } from "../text/gpu-text";
 import type { RunCache } from "../text/run-cache";
 import { FALLBACK_FACES } from "../text/fonts";
-import type { TextAtlas } from "../text/atlas";
+import type { TextAtlas, AtlasRegion } from "../text/atlas";
 import type { ThemeTokens } from "../app/theme";
 import { wbFontSize, type WbItem } from "./model";
 import {
@@ -244,6 +244,8 @@ export interface PainterOpts {
   cache: RunCache;
   atlas: TextAtlas;
   theme: ThemeTokens;
+  /** Resolve an image asset id to an atlas region (image atlas). */
+  images?: (asset: string) => { region: AtlasRegion; atlas: TextAtlas } | null;
   /** world→screen transforms */
   w2sX: (x: number) => number;
   w2sY: (y: number) => number;
@@ -258,6 +260,7 @@ export class WbPainter {
   readonly zoom: number;
   private w2sX: (x: number) => number;
   private w2sY: (y: number) => number;
+  private images?: (asset: string) => { region: AtlasRegion; atlas: TextAtlas } | null;
 
   constructor(o: PainterOpts) {
     this.pass = o.pass;
@@ -267,6 +270,7 @@ export class WbPainter {
     this.zoom = o.zoom;
     this.w2sX = o.w2sX;
     this.w2sY = o.w2sY;
+    this.images = o.images;
   }
 
   s(wx: number, wy: number): [number, number] {
@@ -620,6 +624,27 @@ export class WbPainter {
       case "text": {
         const str = opts.edit?.field === "text" ? (it.text ?? "") : (it.text ?? "");
         this.textItem(it, str, opts.edit?.field === "text" ? opts.edit : undefined, color, f);
+        break;
+      }
+      case "image": {
+        const [sx, sy] = this.s(f.x, f.y);
+        const w = f.w * z, h = f.h * z;
+        const img = it.asset ? this.images?.(it.asset) : null;
+        if (img) {
+          p.text(sx, sy, w, h,
+            { region: img.region, atlasSize: img.atlas.size, color: true, tex: img.atlas },
+            [1, 1, 1, alpha]);
+        } else {
+          // Missing/undecodable asset — dashed placeholder + label.
+          const c = withAlpha(color, alpha * 0.7);
+          this.roughStroke(rectCorners(f, 0, this), it.id, true, lw, c, 1,
+            [Math.max(6, lw * 4.5), Math.max(4, lw * 3)]);
+          const label = it.asset ? "image" : "missing image";
+          const fsPx = Math.max(9, Math.min(18, 14 * z, h * 0.4));
+          const face = faceFor("inter");
+          const tw = this.advance(face, fsPx, label);
+          this.text(sx + (w - tw) / 2, sy + h / 2 - fsPx * 0.4, face, fsPx, label, c);
+        }
         break;
       }
       case "sticky": {

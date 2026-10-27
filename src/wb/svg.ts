@@ -161,7 +161,8 @@ function measureStub(it: WbItem): MeasureFn {
   return (_f, size, t) => t.length * size * (it.font === "hand" ? 0.45 : 0.52);
 }
 
-export function itemSvg(it: WbItem, items: WbItem[], measure: MeasureFn): string {
+export function itemSvg(it: WbItem, items: WbItem[], measure: MeasureFn,
+  imgData?: (asset: string) => string | null): string {
   const f = frameOf(it, measure);
   const st = strokeAttrs(it);
   const tr = rotAttr(it, f);
@@ -203,6 +204,15 @@ export function itemSvg(it: WbItem, items: WbItem[], measure: MeasureFn): string
       }
       return s + textLinesSvg(it, f);
     }
+    case "image": {
+      const b64 = it.asset && imgData ? imgData(it.asset) : null;
+      if (b64) {
+        const op = (it.opacity ?? 1) < 0.999 ? ` opacity="${n(it.opacity)}"` : "";
+        return `<image x="${n(f.x)}" y="${n(f.y)}" width="${n(f.w)}" height="${n(f.h)}" href="data:image/png;base64,${b64}"${op}${tr}/>`;
+      }
+      return `<rect x="${n(f.x)}" y="${n(f.y)}" width="${n(f.w)}" height="${n(f.h)}" fill="none" stroke="${strokeCol}" stroke-width="${n(it.size)}" stroke-dasharray="6,4"${tr}/>`
+        + `<text x="${n(f.x + f.w / 2)}" y="${n(f.y + f.h / 2)}" font-size="${n(Math.min(18, f.h * 0.4))}" fill="${strokeCol}" text-anchor="middle">image</text>`;
+    }
     case "text":
       return `<g${tr}>${textLinesSvg(it, f)}</g>`;
     case "sticky": {
@@ -215,13 +225,14 @@ export function itemSvg(it: WbItem, items: WbItem[], measure: MeasureFn): string
 }
 
 /** Full SVG document for the whiteboard contents (cropped to content + pad). */
-export function wbSvg(wb: WbContent, measure: MeasureFn): string {
+export function wbSvg(wb: WbContent, measure: MeasureFn,
+  imgData?: (asset: string) => string | null): string {
   const b = wbBounds(wb.items, measure);
   const defs: string[] = [];
   const body: string[] = [];
   wb.items.forEach(it => {
     if (it.fill >= 0 && it.fillStyle !== "solid" && it.kind !== "sticky") defs.push(hatchDef(it));
-    body.push(itemSvg(it, wb.items, measure));
+    body.push(itemSvg(it, wb.items, measure, imgData));
   });
   return [
     `<?xml version="1.0" encoding="UTF-8"?>`,

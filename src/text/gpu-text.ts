@@ -29,6 +29,9 @@ export interface RunQuadSrc {
   /** True when the atlas region carries real color (CBDT emoji) — samples
    *  RGBA instead of tinting alpha coverage. */
   color?: boolean;
+  /** Non-default atlas for this quad (e.g. the image atlas) — quads keep
+   *  their pushed order; the render pass splits runs by atlas. */
+  tex?: TextAtlas;
 }
 
 export class GpuTextPass {
@@ -39,8 +42,9 @@ export class GpuTextPass {
   private sampler: GPUSampler;
   private data = new Float32Array(INITIAL_CAPACITY * FLOATS_PER_INSTANCE);
   private count = 0;
-  private bindGroup: GPUBindGroup | null = null;
-  private boundAtlas: TextAtlas | null = null;
+  private bindGroups = new Map<TextAtlas, GPUBindGroup>();
+  /** Per-quad atlas override — indexed by quad slot; null = default atlas. */
+  private quadAtlas: (TextAtlas | null)[] = [];
   /** When set, every quad pushed rotates `angle` rad about (x, y) in surface
    *  px. Lets a whole item (strokes, rects, text runs) draw rotated. */
   rotation: { angle: number; x: number; y: number } | null = null;
@@ -91,6 +95,7 @@ export class GpuTextPass {
 
   begin(): void {
     this.count = 0;
+    this.quadAtlas.length = 0;
   }
 
   private push(): number {
@@ -104,7 +109,7 @@ export class GpuTextPass {
         size: bigger.byteLength,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
       });
-      this.bindGroup = null;
+      this.bindGroups.clear();
       old.destroy();
     }
     return this.count++ * FLOATS_PER_INSTANCE;
@@ -129,9 +134,11 @@ export class GpuTextPass {
   /** Draw a coverage-atlas run quad. */
   text(x: number, y: number, w: number, h: number, src: RunQuadSrc, color: Rgba): void {
     const s = src.atlasSize;
+    const qi = this.count;
     this.quad([x, y, w, h],
       [src.region.u / s, src.region.v / s, (src.region.u + src.region.w) / s, (src.region.v + src.region.h) / s],
       color, [src.color ? KIND_COLOR : KIND_TEXT, 0, 0, 0]);
+    this.quadAtlas[qi] = src.tex ?? null;
   }
 
   /** Solid rectangle — selections, carets, rules, underlines. */
@@ -187,28 +194,34 @@ export class GpuTextPass {
     ranges: { start: number; end: number; scissor?: [number, number, number, number] }[],
     scale = 1): void {
     if (this.count === 0) return;
-    if (this.boundAtlas !== atlas) {
-      this.boundAtlas = atlas;
-      this.bindGroup = null;
-    }
-    if (!this.bindGroup) {
-      this.bindGroup = this.device.createBindGroup({
-        label: "text-bg",
-        layout: this.bindGroupLayout,
-        entries: [
-          { binding: 0, resource: { buffer: this.uniformBuf } },
-          { binding: 1, resource: { buffer: this.instanceBuf } },
-          { binding: 2, resource: atlas.view },
-          { binding: 3, resource: this.sampler },
-        ],
-      });
-    }
+    const bindFor = (a: TextAtlas): GPUBindGroup => {
+      let bg = this.bindGroups.get(a);
+      if (!bg) {
+        bg = this.device.createBindGroup({
+          label: "text-bg",
+          layout: this.bindGroupLayout,
+          entries: [
+            { binding: 0, resource: { buffer: this.uniformBuf } },
+            { binding: 1, resource: { buffer: this.instanceBuf } },
+            { binding: 2, resource: a.view },
+            { binding: 3, resource: this.sampler },
+          ],
+        });
+        this.bindGroups.set(a, bg);
+      }
+      return bg;
+    };
     // The projection maps logical surface px → NDC; scissors are physical.
     this.device.queue.writeBuffer(this.uniformBuf, 0,
       new Float32Array([surfaceW / scale, surfaceH / scale, time, 0]));
     this.device.queue.writeBuffer(this.instanceBuf, 0, this.data, 0, this.count * FLOATS_PER_INSTANCE);
     pass.setPipeline(this.pipeline);
-    pass.setBindGroup(0, this.bindGroup);
+    let boundAtlas: TextAtlas | null = null;
+    const bindAtlas = (a: TextAtlas) => {
+      if (a === boundAtlas) return;
+      boundAtlas = a;
+      pass.setBindGroup(0, bindFor(a));
+    };
     ranges.forEach(r => {
       if (r.end <= r.start) return;
       const clip = r.scissor;
@@ -219,7 +232,16 @@ export class GpuTextPass {
           Math.max(0, Math.min(surfaceW - px, Math.ceil(clip[2] * scale))),
           Math.max(0, Math.min(surfaceH - py, Math.ceil(clip[3] * scale))));
       }
-      pass.draw(6, r.end - r.start, 0, r.start);
+      // Split the range into runs of consecutive same-atlas quads.
+      let i = r.start;
+      for (; i < r.end;) {
+        const a = this.quadAtlas[i] ?? atlas;
+        let j = i + 1;
+        for (; j < r.end && (this.quadAtlas[j] ?? atlas) === a;) j++;
+        bindAtlas(a);
+        pass.draw(6, j - i, 0, i);
+        i = j;
+      }
       if (clip) pass.setScissorRect(0, 0, surfaceW, surfaceH);
     });
   }

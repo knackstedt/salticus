@@ -35,6 +35,7 @@ import {
   WbPainter, STROKE_COLORS, FILL_COLORS, hex, withAlpha, textLayout,
 } from "./draw";
 import { wbSvg, wbBounds } from "./svg";
+import { WbImageCache, loadAssetBase64 } from "./assets";
 import { cropRgba, pdfFromRgba } from "./raster";
 import { encodePNG } from "@downdraft/platform-native";
 import { getNativeHost } from "@downdraft/engine";
@@ -125,6 +126,8 @@ export class WhiteboardSurface implements ScreenUiCompositor {
   private pass: GpuTextPass;
   private cache: RunCache;
   private atlas: TextAtlas;
+  private imgAtlas: TextAtlas;
+  private imgCache: WbImageCache;
   private rect = { x: 0, y: 0, w: 0, h: 0 };
   private wb: WbContent = emptyWhiteboard();
   private unsubs: (() => void)[] = [];
@@ -187,6 +190,10 @@ export class WhiteboardSurface implements ScreenUiCompositor {
     this.pass = new GpuTextPass(device, ctx.getFormat());
     this.cache = sharedCache ?? new RunCache(new TextAtlas(device, 2048));
     this.atlas = this.cache.atlas;
+    // Images get their own (larger) atlas so photos don't evict glyph runs.
+    const imgSize = Math.min(4096, device.limits?.maxTextureDimension2D ?? 4096);
+    this.imgAtlas = new TextAtlas(device, imgSize);
+    this.imgCache = new WbImageCache(this.imgAtlas);
     this.installInput();
   }
 
@@ -293,6 +300,7 @@ export class WhiteboardSurface implements ScreenUiCompositor {
     return new WbPainter({
       pass: this.pass, cache: this.cache, atlas: this.atlas,
       theme: tokens(store.getState().theme),
+      images: (a) => this.imgCache?.getRegion(a) ?? null,
       w2sX: (x) => this.w2sX(x), w2sY: (y) => this.w2sY(y), zoom: this.wb.cam.zoom,
     });
   }
@@ -2136,8 +2144,13 @@ export class WhiteboardSurface implements ScreenUiCompositor {
       }
     }
 
-    // Items.
+    // Items — culled to the visible world rect (also bounds how many image
+    // assets decode/upload per frame on big boards).
+    const vx0 = this.wb.cam.x - 40, vy0 = this.wb.cam.y - 40;
+    const vx1 = this.wb.cam.x + this.rect.w / z + 40, vy1 = this.wb.cam.y + this.rect.h / z + 40;
     this.wb.items.forEach(it => {
+      const f = frameOf(it, this.measure);
+      if (f.x > vx1 || f.x + f.w < vx0 || f.y > vy1 || f.y + f.h < vy0) return;
       pt.drawItem(it, this.wb.items, {
         edit: this.editing?.itemId === it.id
           ? { field: this.editing.field, caret: this.editing.caret, anchor: this.editing.anchor, blinkOn: this.blinkT % 1 < 0.55 }
@@ -2417,7 +2430,7 @@ export class WhiteboardSurface implements ScreenUiCompositor {
     const base = join(this.exportDir(), `whiteboard-${stamp}`);
     try {
       if (fmt === "svg") {
-        writeFileSync(`${base}.svg`, wbSvg(wb, this.measure));
+        writeFileSync(`${base}.svg`, wbSvg(wb, this.measure, loadAssetBase64));
         this.showToast(`Exported ${base}.svg`);
         return;
       }
@@ -2815,6 +2828,7 @@ export class WhiteboardSurface implements ScreenUiCompositor {
     if (this.disposed) return;
     this.disposed = true;
     this.unsubs.forEach(u => u());
+    this.imgAtlas.destroy();
     this.pass.destroy();
   }
 }

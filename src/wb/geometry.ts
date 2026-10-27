@@ -296,7 +296,7 @@ export function eraserHits(it: WbItem, wx: number, wy: number, r: number,
   const f = frameOf(it, measure);
   const c = frameCenter(f);
   const p = it.angle ? unrot(wx, wy, c.x, c.y, it.angle) : { x: wx, y: wy };
-  if ((it.kind === "rect" || it.kind === "sticky" || it.kind === "text") &&
+  if ((it.kind === "rect" || it.kind === "sticky" || it.kind === "text" || it.kind === "image") &&
       p.x >= f.x && p.x <= f.x + f.w && p.y >= f.y && p.y <= f.y + f.h) return true;
   if ((it.kind === "ellipse" || it.kind === "diamond") && it.fill >= 0 &&
       hitItem(it, wx, wy, 0, measure, items)) return true;

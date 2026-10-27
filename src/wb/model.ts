@@ -10,7 +10,7 @@
 
 import { newId } from "../app/store";
 
-export type WbItemKind = "stroke" | "rect" | "diamond" | "ellipse" | "line" | "arrow" | "text" | "sticky";
+export type WbItemKind = "stroke" | "rect" | "diamond" | "ellipse" | "line" | "arrow" | "text" | "sticky" | "image";
 export type WbFillStyle = "none" | "hachure" | "cross" | "solid";
 export type WbStrokeStyle = "solid" | "dashed" | "dotted";
 export type WbArrowhead = "none" | "arrow" | "triangle" | "dot";
@@ -68,6 +68,8 @@ export interface WbItem {
   /** Arrow endpoint bindings — keep arrows attached to shapes. */
   bindStart?: WbBinding | null;
   bindEnd?: WbBinding | null;
+  /** image items: raster asset id — <workspace>/assets/<id>.png. */
+  asset?: string;
 }
 
 export interface WbCamera {
@@ -142,6 +144,7 @@ export function normalizeWbItem(raw: Partial<WbItem> & { kind: WbItemKind }, leg
     endArrow: ARROWHEADS.includes(raw.endArrow as WbArrowhead) ? raw.endArrow : (raw.kind === "arrow" ? "arrow" : "none"),
     bindStart: raw.bindStart ?? null,
     bindEnd: raw.bindEnd ?? null,
+    asset: raw.asset,
   };
   if (raw.points) it.points = raw.points.slice();
   // Legacy saves kept stroke points in absolute world coords. Rebase them

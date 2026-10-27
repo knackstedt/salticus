@@ -77,7 +77,7 @@ export class TextAtlas {
     if (bpr === w * 4) {
       this.device.queue.writeTexture(
         { texture: this.texture, origin: { x: region.u, y: region.v } },
-        data,
+        data as Uint8Array<ArrayBuffer>,
         { bytesPerRow: w * 4 },
         { width: w, height: h },
       );
