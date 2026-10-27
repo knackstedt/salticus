@@ -21,7 +21,7 @@ export function demoDoc(): Doc {
       {
         id: newBlockId(), kind: "paragraph", spans: [
           { text: "A ", style: T() },
-          { text: "GPU-native", style: T({ weight: 600, color: [0.45, 0.62, 0.98, 1] }) },
+          { text: "GPU-native", style: T({ weight: 600, color: [0.37, 0.90, 0.66, 1] }) },
           { text: " note-taking surface rendered with ", style: T() },
           { text: "custom text shaping", style: T({ italic: true }) },
           { text: ", a coverage atlas, and an instanced quad pipeline. Every glyph you see was rasterized by cosmic-text, shaped by HarfBuzz, and drawn by our own WGSL pass.", style: T() },

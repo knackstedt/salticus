@@ -2,6 +2,9 @@
   "name": "salticus",
   "version": "0.1.0",
   "type": "module",
+  "build": {
+    "icon": "assets/icon.png"
+  },
   "scripts": {
     "dev": "draft dev",
     "build": "draft release --stage=build",
