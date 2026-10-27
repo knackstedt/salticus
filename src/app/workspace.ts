@@ -140,10 +140,13 @@ export function loadPageContent(id: string): PageContent | null {
 function sanitizeDoc(c: PageContent): void {
   if (c.type !== "doc" || !c.doc?.blocks) return;
   const themeTexts = [
-    [0.82, 0.84, 0.90, 1], // darkTheme().text
-    [0.16, 0.17, 0.21, 1], // lightTheme().text
-    [0.78, 0.82, 0.95, 1], // darkTheme().codeText
-    [0.25, 0.28, 0.50, 1], // lightTheme().codeText
+    [0.82, 0.84, 0.90, 1], // darkTheme().text (pre-grayscale)
+    [0.16, 0.17, 0.21, 1], // lightTheme().text (pre-grayscale)
+    [0.78, 0.82, 0.95, 1], // darkTheme().codeText (pre-grayscale)
+    [0.25, 0.28, 0.50, 1], // lightTheme().codeText (pre-grayscale)
+    [0.86, 0.86, 0.86, 1], // darkTheme().text / codeText
+    [0.18, 0.18, 0.18, 1], // lightTheme().text
+    [0.25, 0.25, 0.25, 1], // lightTheme().codeText
   ];
   for (const b of c.doc.blocks) {
     const map = b.kind === "codeblock" ? "\n" : "";

@@ -37,7 +37,7 @@ let governor: FrameGovernor | null = null;
 //   - html-ui panels (Blitz docs) at order 0
 // ============================================================================
 
-const BG = { r: 0x19 / 255, g: 0x1b / 255, b: 0x1e / 255, a: 1 };
+const BG = { r: 0x1b / 255, g: 0x1b / 255, b: 0x1b / 255, a: 1 };
 
 export const gameModule: GameModule = {
   renderer: (surface) =>

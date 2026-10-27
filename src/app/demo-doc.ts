@@ -10,7 +10,7 @@ const T = (over: Partial<TextStyle> = {}): TextStyle => ({
   weight: 400,
   italic: false,
   sizePx: 16,
-  color: [0.82, 0.84, 0.90, 1],
+  color: [0.86, 0.86, 0.86, 1],
   ...over,
 });
 

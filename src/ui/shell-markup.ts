@@ -119,7 +119,7 @@ export function sidebarMarkup(s: AppState): string {
   return `
     <div class="sc-col" style="height:${Math.round(s.windowH / s.dpr)}px;overflow:hidden">
       <div class="sc-row" style="padding:12px 10px 6px;gap:8px">
-        <svg width="20" height="20" viewBox="0 0 64 64" style="flex:none"><defs><linearGradient id="slp" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7DF2C1"/><stop offset="1" stop-color="#3ED598"/></linearGradient></defs><g transform="translate(29.9 28) rotate(45)"><rect x="-4" y="-20" width="8" height="6" rx="2" fill="#2AAE7E"/><rect x="-4" y="-14" width="8" height="22" fill="url(#slp)"/><path d="M-4 8 L0 18 L4 8 Z" fill="url(#slp)"/><path d="M-1.5 13.5 L0 18 L1.5 13.5 Z" fill="#17191C"/></g><rect x="14" y="48" width="36" height="5" rx="2.5" fill="#5EE6A8" opacity="0.45"/></svg>
+        <svg width="20" height="20" viewBox="0 0 64 64" style="flex:none"><defs><linearGradient id="slp" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7DF2C1"/><stop offset="1" stop-color="#3ED598"/></linearGradient></defs><g transform="translate(29.9 28) rotate(45)"><rect x="-4" y="-20" width="8" height="6" rx="2" fill="#2AAE7E"/><rect x="-4" y="-14" width="8" height="22" fill="url(#slp)"/><path d="M-4 8 L0 18 L4 8 Z" fill="url(#slp)"/><path d="M-1.5 13.5 L0 18 L1.5 13.5 Z" fill="#181818"/></g><rect x="14" y="48" width="36" height="5" rx="2.5" fill="#5EE6A8" opacity="0.45"/></svg>
         <div class="sc-grow" style="font-weight:600;font-size:13px">Salticus</div>
         <div class="sc-btn" data-action="toggle-theme" style="padding:3px 5px">${icon(s.theme === "dark" ? "moon" : "sun", 13)}</div>
       </div>
@@ -164,7 +164,7 @@ export function topbarMarkup(s: AppState): string {
   }
   const save = s.saveIndicator === "saving" ? "Saving…" : s.saveIndicator === "error" ? "Save error" : "Saved";
   return `
-    <div class="sc-row" style="height:100%;padding:0 8px;gap:4px;border-bottom:1px solid var(--dd-line, #2a2d33)">
+    <div class="sc-row" style="height:100%;padding:0 8px;gap:4px;border-bottom:1px solid var(--dd-line, #2d2d2d)">
       <div class="sc-faint" style="font-size:12px;padding-right:6px">${crumb}</div>
       <div class="sc-row sc-grow" style="gap:2px;overflow:hidden;flex-wrap:nowrap">${tabs}</div>
       <div class="sc-faint" style="font-size:11px;padding:0 6px;flex:none">${save}</div>

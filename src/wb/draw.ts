@@ -21,7 +21,7 @@ import {
 // ── palettes ────────────────────────────────────────────────────────────────
 
 export const STROKE_COLORS: Rgba[] = [
-  [0.91, 0.91, 0.93, 1], // ink
+  [0.92, 0.92, 0.92, 1], // ink
   [0.93, 0.42, 0.46, 1], // red
   [0.95, 0.65, 0.28, 1], // orange
   [0.48, 0.80, 0.48, 1], // green
@@ -32,7 +32,7 @@ export const STROKE_NAMES = ["Ink", "Red", "Orange", "Green", "Blue", "Violet"];
 
 /** Fill swatches — muted, slightly translucent so shapes stay sketchy. */
 export const FILL_COLORS: Rgba[] = [
-  [0.82, 0.82, 0.86, 0.28],
+  [0.83, 0.83, 0.83, 0.28],
   [0.88, 0.36, 0.40, 0.32],
   [0.90, 0.58, 0.22, 0.34],
   [0.40, 0.72, 0.40, 0.32],
@@ -41,7 +41,7 @@ export const FILL_COLORS: Rgba[] = [
 ];
 
 export const STICKY_COLORS: Rgba[] = [
-  [0.24, 0.22, 0.30, 1],
+  [0.25, 0.25, 0.25, 1],
   [0.42, 0.28, 0.30, 1],
   [0.46, 0.36, 0.20, 1],
   [0.24, 0.36, 0.28, 1],
@@ -629,11 +629,11 @@ export class WbPainter {
         p.roundedRect(sx + 3 * z, sy + 5 * z, w, h, 7, [0, 0, 0, 0.35]);
         p.roundedRect(sx, sy, w, h, 7, bg);
         const corners = rectCorners(f, 6 / z, this);
-        this.roughStroke(corners, it.id, true, Math.max(1, 1.2 * z), [0.95, 0.95, 0.97, 0.4], 1);
+        this.roughStroke(corners, it.id, true, Math.max(1, 1.2 * z), [0.96, 0.96, 0.96, 0.4], 1);
         p.roundedRect(sx, sy, w, Math.min(h, 26 * z), 7, [1, 1, 1, 0.06]);
         const str = it.text ?? "";
         this.containerText(it, str, opts.edit?.field === "text" ? opts.edit : undefined,
-          [0.93, 0.93, 0.95, 0.95], f, 26 / 1);
+          [0.94, 0.94, 0.94, 0.95], f, 26 / 1);
         break;
       }
     }

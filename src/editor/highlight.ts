@@ -24,24 +24,24 @@ export interface SyntaxPalette {
 export const darkSyntax: SyntaxPalette = {
   keyword: [0.80, 0.47, 0.85, 1],
   string: [0.62, 0.80, 0.42, 1],
-  comment: [0.42, 0.48, 0.55, 1],
+  comment: [0.48, 0.48, 0.48, 1],
   number: [0.85, 0.65, 0.40, 1],
   type: [0.38, 0.78, 0.78, 1],
   builtin: [0.86, 0.84, 0.55, 1],
-  operator: [0.75, 0.78, 0.85, 1],
-  plain: [0.82, 0.84, 0.90, 1],
+  operator: [0.79, 0.79, 0.79, 1],
+  plain: [0.85, 0.85, 0.85, 1],
   property: [0.60, 0.76, 0.95, 1],
 };
 
 export const lightSyntax: SyntaxPalette = {
   keyword: [0.60, 0.15, 0.65, 1],
   string: [0.18, 0.50, 0.15, 1],
-  comment: [0.50, 0.55, 0.60, 1],
+  comment: [0.55, 0.55, 0.55, 1],
   number: [0.70, 0.40, 0.10, 1],
   type: [0.10, 0.45, 0.55, 1],
   builtin: [0.60, 0.55, 0.10, 1],
-  operator: [0.35, 0.38, 0.45, 1],
-  plain: [0.16, 0.17, 0.21, 1],
+  operator: [0.39, 0.39, 0.39, 1],
+  plain: [0.18, 0.18, 0.18, 1],
   property: [0.15, 0.35, 0.75, 1],
 };
 
