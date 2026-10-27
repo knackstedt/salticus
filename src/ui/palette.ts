@@ -208,7 +208,7 @@ export class PaletteSurface implements ScreenUiCompositor {
   private text(x: number, y: number, face: string, size: number, str: string, color: Rgba): void {
     const chunk = this.cache.getChunk(face, size, str);
     if (!chunk || !chunk.region) return;
-    this.pass.text(x + chunk.inkX, y, chunk.w, chunk.h,
+    this.pass.text(Math.round(x + chunk.inkX), Math.round(y), chunk.w, chunk.h,
       { region: chunk.region, atlasSize: this.atlas.size }, color);
   }
 
@@ -224,8 +224,8 @@ export class PaletteSurface implements ScreenUiCompositor {
     // Backdrop — the pass is fed logical px (surfaceW/dpr covers the surface).
     p.rect(0, 0, surfaceW / this.dpr, surfaceH / this.dpr, [0, 0, 0, 0.42]);
 
-    const px = this.rect.x + (this.rect.w - PANEL_W) / 2;
-    const py = this.rect.y + Math.max(40, this.rect.h * 0.18);
+    const px = Math.round(this.rect.x + (this.rect.w - PANEL_W) / 2);
+    const py = Math.round(this.rect.y + Math.max(40, this.rect.h * 0.18));
     const rowCount = Math.max(1, Math.min(this.rows.length, MAX_ROWS));
     const ph = 56 + rowCount * ROW_H + 8;
     this.bounds = { x: px, y: py, w: PANEL_W, h: ph };
@@ -241,7 +241,7 @@ export class PaletteSurface implements ScreenUiCompositor {
     this.text(px + 18, py + 17, "inter:400:normal", 15, shown, qColor);
     if (this.blinkT % 1 < 0.53) {
       const tw = this.measure("inter:400:normal", 15, this.query);
-      p.rect(px + 18 + tw + 2, py + 16, 1.5, 18, hex(t.accent));
+      p.rect(Math.round(px + 18 + tw + 2), py + 16, 1.5, 18, hex(t.accent));
     }
     p.rect(px + 10, py + 50, PANEL_W - 20, 1, hex(t.lineSoft));
 

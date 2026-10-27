@@ -82,19 +82,19 @@ html, body { height: 100%; }
 body { background: transparent; color: ${t.text}; font-family: 'Inter'; font-size: 13px; overflow: hidden; }
 
 .sc-panel { background: ${t.bgPanel}; }
-.sc-row { display: flex; alisc-items: center; }
+.sc-row { display: flex; align-items: center; }
 .sc-col { display: flex; flex-direction: column; }
 .sc-grow { flex: 1; }
 .sc-dim { color: ${t.textDim}; }
 .sc-faint { color: ${t.textFaint}; }
 
-.sc-item { display: flex; alisc-items: center; gap: 6px; padding: 4px 8px;
+.sc-item { display: flex; align-items: center; gap: 6px; padding: 4px 8px;
   border-radius: 5px; color: ${t.textDim}; font-size: 13px; position: relative; }
 .sc-item:hover { background: ${t.bgHover}; color: ${t.text}; }
 .sc-item[data-active="true"] { background: ${t.bgActive}; color: ${t.text}; }
 .sc-item .ic { width: 18px; text-align: center; flex: none; }
 .sc-item .lb { flex: 1; overflow: hidden; }
-.sc-item .tw { width: 14px; flex: none; display: flex; alisc-items: center;
+.sc-item .tw { width: 14px; flex: none; display: flex; align-items: center;
   justify-content: center; color: ${t.textFaint}; border-radius: 3px; }
 .sc-item .tw:hover { background: ${t.bgActive}; color: ${t.text}; }
 .sc-item .fav { opacity: 0; padding: 1px 3px; border-radius: 3px; color: ${t.textFaint}; flex: none; }
@@ -113,7 +113,7 @@ body { background: transparent; color: ${t.text}; font-family: 'Inter'; font-siz
 .sc-btn[data-kind="accent"] { background: ${t.accent}; color: #fff; }
 .sc-btn[data-kind="accent"]:hover { filter: brightness(1.1); color: #fff; }
 
-.sc-tab { display: flex; alisc-items: center; gap: 6px; padding: 4px 10px;
+.sc-tab { display: flex; align-items: center; gap: 6px; padding: 4px 10px;
   border-radius: 5px; color: ${t.textDim}; font-size: 12.5px; max-width: 160px;
   min-width: 0; flex: 0 1 auto; }
 .sc-tab:hover { background: ${t.bgHover}; color: ${t.text}; }
@@ -130,7 +130,7 @@ body { background: transparent; color: ${t.text}; font-family: 'Inter'; font-siz
 
 .sc-menu { background: ${t.bgElev}; border: 1px solid ${t.line}; border-radius: 8px;
   padding: 5px; min-width: 180px; }
-.sc-menu .mi { display: flex; alisc-items: center; gap: 8px; padding: 5px 9px;
+.sc-menu .mi { display: flex; align-items: center; gap: 8px; padding: 5px 9px;
   border-radius: 5px; color: ${t.text}; font-size: 13px; }
 .sc-menu .mi:hover { background: ${t.accentSoft}; }
 .sc-menu .mi[data-kind="danger"]:hover { background: ${t.danger}22; color: ${t.danger}; }
