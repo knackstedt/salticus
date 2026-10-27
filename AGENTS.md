@@ -63,6 +63,24 @@ local .so — rebuild with `cd
 build:native` and copy `native/linux-x64/libdowndraft_platform.so` into
 `node_modules/@downdraft/native-linux-x64/lib/`.
 
+## Patched npm package JS (iconPath forward)
+
+`runNativeGameModule` in **0.8.0 does not accept `iconPath`** — the window
+gets WM_CLASS/app_id (taskbar grouping) but never `_NET_WM_ICON`, so dev
+windows show a generic taskbar icon. Patched locally:
+
+- `node_modules/@downdraft/platform-native/src/native-game-module.ts` —
+  `iconPath?: string` on `RunNativeGameModuleOptions`, forwarded into the
+  `createNativeHost` window config.
+- `node_modules/@downdraft/platform-native/dist/src/native-game-module.js`
+  — same forward in the compiled copy.
+
+A reinstall wipes both — reapply, or use the engine checkout where the
+same option was added to `runNativeAppModule`
+(`packages/platform-native/src/native-app-module.ts`, uncommitted).
+Verify with `xprop _NET_WM_ICON` on the live window — MCP screenshots
+never show WM/taskbar state.
+
 ## Render-on-demand (frame governor)
 
 `src/app/frame-governor.ts` is the app-side wake bridge for `damageOnly` —

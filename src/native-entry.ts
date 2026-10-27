@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { runNativeGameModule } from "@downdraft/platform-native";
 import { gameModule } from "./game-module";
 
@@ -8,6 +9,7 @@ import { gameModule } from "./game-module";
 await runNativeGameModule(gameModule, {
   title: "Salticus",
   appId: "downdraft-salticus",
+  iconPath: fileURLToPath(new URL("../assets/icon.png", import.meta.url)),
 }).catch((e) => {
   console.error("[native-entry] Fatal:", e);
   process.exit(1);
