@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7DF2C1"/>
+      <stop offset="1" stop-color="#3ED598"/>
+    </linearGradient>
+  </defs>
+  <!-- legs -->
+  <g stroke="#3BCB8F" stroke-width="3.5" stroke-linecap="round" fill="none">
+    <path d="M17 26 L9 19"/>
+    <path d="M13 35 L4 34"/>
+    <path d="M16 44 L9 52"/>
+    <path d="M47 26 L55 19"/>
+    <path d="M51 35 L60 34"/>
+    <path d="M48 44 L55 52"/>
+  </g>
+  <!-- cephalothorax -->
+  <path d="M14 40 C14 25 22 17 32 17 C42 17 50 25 50 40 C50 45 46 48 32 48 C18 48 14 45 14 40 Z" fill="url(#g)"/>
+  <!-- front eyes (the jumping-spider signature) -->
+  <circle cx="25" cy="33" r="7" fill="#17191C"/>
+  <circle cx="39" cy="33" r="7" fill="#17191C"/>
+  <circle cx="23" cy="31" r="1.8" fill="#fff" opacity="0.9"/>
+  <circle cx="37" cy="31" r="1.8" fill="#fff" opacity="0.9"/>
+  <!-- side eyes -->
+  <circle cx="16.5" cy="29.5" r="2.2" fill="#17191C"/>
+  <circle cx="47.5" cy="29.5" r="2.2" fill="#17191C"/>
+</svg>

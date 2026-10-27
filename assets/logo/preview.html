@@ -1,0 +1,48 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>salticus — logo preview</title>
+<style>
+  body { margin:0; font-family:system-ui,sans-serif; background:#191b1e; color:#e8e9eb; }
+  h1 { font-size:15px; font-weight:600; padding:16px 24px 0; color:#9aa0a8; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:14px; padding:16px 24px 24px; }
+  .card { background:#1f2125; border:1px solid #2a2d33; border-radius:10px; padding:16px; }
+  .card .name { font-size:12px; color:#9aa0a8; margin-bottom:12px; }
+  .row { display:flex; align-items:flex-end; gap:14px; }
+  .swatch { background:#191b1e; border-radius:8px; display:flex; align-items:center; justify-content:center; }
+  .swatch.light { background:#f7f7f5; }
+  .footer { padding:0 24px 24px; }
+  .footer .name { font-size:12px; color:#9aa0a8; margin-bottom:10px; }
+</style>
+</head>
+<body>
+<h1>salticus logo candidates — dark + light, 16/32/64px</h1>
+<div class="grid" id="grid"></div>
+<div class="footer">
+  <div class="name">lockup + app icon</div>
+  <div class="row">
+    <div class="swatch" style="padding:18px 26px"><img src="lockup.svg" height="44"></div>
+    <div class="swatch" style="padding:14px"><img src="app-icon.svg" width="96"></div>
+    <div class="swatch" style="padding:14px"><img src="app-icon.svg" width="48"></div>
+  </div>
+</div>
+<script>
+  const marks = ["mark-spider", "mark-note", "mark-s", "mark-layers", "mark-pen"];
+  const grid = document.getElementById("grid");
+  for (const m of marks) {
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML = `<div class="name">${m}.svg</div><div class="row">` +
+      [64, 32, 16].map(s =>
+        `<div class="swatch" style="width:${s + 20}px;height:${s + 20}px"><img src="${m}.svg" width="${s}"></div>`
+      ).join("") +
+      `</div><div class="row" style="margin-top:10px">` +
+      [32, 16].map(s =>
+        `<div class="swatch light" style="width:${s + 20}px;height:${s + 20}px"><img src="${m}.svg" width="${s}"></div>`
+      ).join("") + `</div>`;
+    grid.appendChild(card);
+  }
+</script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 64">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7DF2C1"/>
+      <stop offset="1" stop-color="#3ED598"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(29.9 28) rotate(45)">
+    <rect x="-4" y="-20" width="8" height="6" rx="2" fill="#2AAE7E"/>
+    <rect x="-4" y="-14" width="8" height="22" fill="url(#g)"/>
+    <path d="M-4 8 L0 18 L4 8 Z" fill="url(#g)"/>
+    <path d="M-1.5 13.5 L0 18 L1.5 13.5 Z" fill="#17191C"/>
+  </g>
+  <rect x="14" y="48" width="36" height="5" rx="2.5" fill="#5EE6A8" opacity="0.45"/>
+  <text x="72" y="42" font-family="ui-sans-serif, system-ui, 'Segoe UI', sans-serif"
+        font-size="30" font-weight="700" letter-spacing="0.5" fill="#E8E9EB">salticus</text>
+</svg>
