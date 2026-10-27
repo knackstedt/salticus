@@ -6,8 +6,8 @@ import { gameModule } from "./game-module";
 // HostAPI bridge.
 
 await runNativeGameModule(gameModule, {
-  title: "graphic-notes — Native",
-  appId: "downdraft-graphic-notes",
+  title: "Salticus",
+  appId: "downdraft-salticus",
 }).catch((e) => {
   console.error("[native-entry] Fatal:", e);
   process.exit(1);

@@ -17,7 +17,7 @@ const T = (over: Partial<TextStyle> = {}): TextStyle => ({
 export function demoDoc(): Doc {
   return {
     blocks: [
-      { id: newBlockId(), kind: "h1", spans: [{ text: "Graphic Notes", style: T({ weight: 700 }) }] },
+      { id: newBlockId(), kind: "h1", spans: [{ text: "Salticus", style: T({ weight: 700 }) }] },
       {
         id: newBlockId(), kind: "paragraph", spans: [
           { text: "A ", style: T() },

@@ -13,7 +13,7 @@ const DRAFT = `${process.env.HOME}/.bun/bin/bun`;
 const cwd = `${import.meta.dir}/..`;
 let failures = 0;
 
-const PID_ARGS = process.env.GN_PID ? ["--pid", process.env.GN_PID] : [];
+const PID_ARGS = process.env.SALTICUS_PID ? ["--pid", process.env.SALTICUS_PID] : [];
 
 async function mcp(tool: string, args: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
   const r = await $`${DRAFT} run draft mcp call ${tool} ${JSON.stringify(args)} ${{ raw: PID_ARGS.join(" ") }}`.cwd(cwd).quiet().nothrow();
@@ -23,8 +23,8 @@ async function mcp(tool: string, args: Record<string, unknown> = {}): Promise<Re
 }
 
 async function shot(name: string): Promise<void> {
-  await $`${DRAFT} run draft mcp screenshot /tmp/gn-${name}.png ${{ raw: PID_ARGS.join(" ") }}`.cwd(cwd).quiet().nothrow();
-  console.log(`  📸 /tmp/gn-${name}.png`);
+  await $`${DRAFT} run draft mcp screenshot /tmp/sc-${name}.png ${{ raw: PID_ARGS.join(" ") }}`.cwd(cwd).quiet().nothrow();
+  console.log(`  📸 /tmp/sc-${name}.png`);
 }
 
 async function key(k: string, mods: Record<string, unknown> = {}): Promise<void> {
@@ -233,7 +233,7 @@ await check("page thumbnail persisted", async () => {
   // Thumbs capture ~1.2s after a page renders; the doc was active above.
   await mcp("open_page", { id: docId });
   await new Promise((r) => setTimeout(r, 3000));
-  const thumbs = await $`ls ${process.env.HOME}/.config/downdraft-graphic-notes/workspace/thumbs`.quiet().nothrow();
+  const thumbs = await $`ls ${process.env.HOME}/.config/downdraft-salticus/workspace/thumbs`.quiet().nothrow();
   assert(thumbs.stdout.toString().includes(`${docId}.png`), `thumb file for ${docId}`);
 });
 
@@ -244,7 +244,7 @@ await check("kanban semibold face registered", async () => {
 });
 
 await check("persistence: doc saved", async () => {
-  const pages = await $`ls ${process.env.HOME}/.config/downdraft-graphic-notes/workspace/pages`.quiet();
+  const pages = await $`ls ${process.env.HOME}/.config/downdraft-salticus/workspace/pages`.quiet();
   assert(pages.stdout.toString().includes(docId), "doc page file exists");
 });
 

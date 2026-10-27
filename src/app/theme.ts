@@ -81,58 +81,58 @@ export function chromeCss(t: ThemeTokens): string {
 html, body { height: 100%; }
 body { background: transparent; color: ${t.text}; font-family: 'Inter'; font-size: 13px; overflow: hidden; }
 
-.gn-panel { background: ${t.bgPanel}; }
-.gn-row { display: flex; align-items: center; }
-.gn-col { display: flex; flex-direction: column; }
-.gn-grow { flex: 1; }
-.gn-dim { color: ${t.textDim}; }
-.gn-faint { color: ${t.textFaint}; }
+.sc-panel { background: ${t.bgPanel}; }
+.sc-row { display: flex; alisc-items: center; }
+.sc-col { display: flex; flex-direction: column; }
+.sc-grow { flex: 1; }
+.sc-dim { color: ${t.textDim}; }
+.sc-faint { color: ${t.textFaint}; }
 
-.gn-item { display: flex; align-items: center; gap: 6px; padding: 4px 8px;
+.sc-item { display: flex; alisc-items: center; gap: 6px; padding: 4px 8px;
   border-radius: 5px; color: ${t.textDim}; font-size: 13px; position: relative; }
-.gn-item:hover { background: ${t.bgHover}; color: ${t.text}; }
-.gn-item[data-active="true"] { background: ${t.bgActive}; color: ${t.text}; }
-.gn-item .ic { width: 18px; text-align: center; flex: none; }
-.gn-item .lb { flex: 1; overflow: hidden; }
-.gn-item .tw { width: 14px; flex: none; display: flex; align-items: center;
+.sc-item:hover { background: ${t.bgHover}; color: ${t.text}; }
+.sc-item[data-active="true"] { background: ${t.bgActive}; color: ${t.text}; }
+.sc-item .ic { width: 18px; text-align: center; flex: none; }
+.sc-item .lb { flex: 1; overflow: hidden; }
+.sc-item .tw { width: 14px; flex: none; display: flex; alisc-items: center;
   justify-content: center; color: ${t.textFaint}; border-radius: 3px; }
-.gn-item .tw:hover { background: ${t.bgActive}; color: ${t.text}; }
-.gn-item .fav { opacity: 0; padding: 1px 3px; border-radius: 3px; color: ${t.textFaint}; flex: none; }
-.gn-item:hover .fav, .gn-item .fav.on { opacity: 1; }
-.gn-item .fav:hover { background: ${t.bgActive}; color: ${t.warn}; }
-.gn-item .fav.add:hover { color: ${t.text}; }
-.gn-item .fav.on { color: ${t.warn}; }
-.gn-btn[data-active="true"] { background: ${t.bgActive}; color: ${t.text}; }
+.sc-item .tw:hover { background: ${t.bgActive}; color: ${t.text}; }
+.sc-item .fav { opacity: 0; padding: 1px 3px; border-radius: 3px; color: ${t.textFaint}; flex: none; }
+.sc-item:hover .fav, .sc-item .fav.on { opacity: 1; }
+.sc-item .fav:hover { background: ${t.bgActive}; color: ${t.warn}; }
+.sc-item .fav.add:hover { color: ${t.text}; }
+.sc-item .fav.on { color: ${t.warn}; }
+.sc-btn[data-active="true"] { background: ${t.bgActive}; color: ${t.text}; }
 
-.gn-section { font-size: 11px; font-weight: 600; color: ${t.textFaint};
+.sc-section { font-size: 11px; font-weight: 600; color: ${t.textFaint};
   letter-spacing: 0.4px; padding: 14px 10px 4px; }
 
-.gn-btn { display: inline-block; padding: 5px 10px; border-radius: 5px;
+.sc-btn { display: inline-block; padding: 5px 10px; border-radius: 5px;
   color: ${t.textDim}; font-size: 12.5px; }
-.gn-btn:hover { background: ${t.bgHover}; color: ${t.text}; }
-.gn-btn[data-kind="accent"] { background: ${t.accent}; color: #fff; }
-.gn-btn[data-kind="accent"]:hover { filter: brightness(1.1); color: #fff; }
+.sc-btn:hover { background: ${t.bgHover}; color: ${t.text}; }
+.sc-btn[data-kind="accent"] { background: ${t.accent}; color: #fff; }
+.sc-btn[data-kind="accent"]:hover { filter: brightness(1.1); color: #fff; }
 
-.gn-tab { display: flex; align-items: center; gap: 6px; padding: 4px 10px;
+.sc-tab { display: flex; alisc-items: center; gap: 6px; padding: 4px 10px;
   border-radius: 5px; color: ${t.textDim}; font-size: 12.5px; max-width: 160px;
   min-width: 0; flex: 0 1 auto; }
-.gn-tab:hover { background: ${t.bgHover}; color: ${t.text}; }
-.gn-tab[data-active="true"] { background: ${t.bg}; color: ${t.text};
+.sc-tab:hover { background: ${t.bgHover}; color: ${t.text}; }
+.sc-tab[data-active="true"] { background: ${t.bg}; color: ${t.text};
   border: 1px solid ${t.lineSoft}; padding: 3px 9px; }
-.gn-tab .x { color: ${t.textFaint}; border-radius: 3px; padding: 0 3px; }
-.gn-tab .x:hover { color: ${t.text}; background: ${t.bgActive}; }
+.sc-tab .x { color: ${t.textFaint}; border-radius: 3px; padding: 0 3px; }
+.sc-tab .x:hover { color: ${t.text}; background: ${t.bgActive}; }
 
-.gn-input { background: ${t.bgHover}; color: ${t.text}; border: 1px solid ${t.line};
+.sc-input { background: ${t.bgHover}; color: ${t.text}; border: 1px solid ${t.line};
   border-radius: 5px; padding: 5px 9px; font-size: 13px; font-family: 'Inter'; }
-.gn-input:focus { border-color: ${t.accent}; }
+.sc-input:focus { border-color: ${t.accent}; }
 
-.gn-divider { height: 1px; background: ${t.lineSoft}; margin: 6px 4px; }
+.sc-divider { height: 1px; background: ${t.lineSoft}; margin: 6px 4px; }
 
-.gn-menu { background: ${t.bgElev}; border: 1px solid ${t.line}; border-radius: 8px;
+.sc-menu { background: ${t.bgElev}; border: 1px solid ${t.line}; border-radius: 8px;
   padding: 5px; min-width: 180px; }
-.gn-menu .mi { display: flex; align-items: center; gap: 8px; padding: 5px 9px;
+.sc-menu .mi { display: flex; alisc-items: center; gap: 8px; padding: 5px 9px;
   border-radius: 5px; color: ${t.text}; font-size: 13px; }
-.gn-menu .mi:hover { background: ${t.accentSoft}; }
-.gn-menu .mi[data-kind="danger"]:hover { background: ${t.danger}22; color: ${t.danger}; }
+.sc-menu .mi:hover { background: ${t.accentSoft}; }
+.sc-menu .mi[data-kind="danger"]:hover { background: ${t.danger}22; color: ${t.danger}; }
 `;
 }

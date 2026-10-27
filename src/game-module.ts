@@ -28,7 +28,7 @@ let pageCtl: (() => void) | null = null;
 let governor: FrameGovernor | null = null;
 
 // ============================================================================
-// Graphic Notes — renderer-only GameModule
+// Salticus — renderer-only GameModule
 //
 // A notes app has no simulation worker: everything (document state, layout,
 // animation) lives on the renderer thread. The renderer runs in 2D mode with
@@ -67,7 +67,7 @@ export const gameModule: GameModule = {
     const unsubAutosave = installAutosave();
 
     const mod = createHtmlUi({
-      name: "graphic-notes-ui",
+      name: "salticus-ui",
       nav: false,
       build(ui) {
         mountShell(ui, ctx);
@@ -78,7 +78,7 @@ export const gameModule: GameModule = {
     // Custom GPU surfaces — drawn beneath the chrome panels. All views share
     // one glyph atlas/run cache so shaped text is reused across surfaces.
     const surfacesModule: RendererModule = {
-      name: "gn-surfaces",
+      name: "salticus-surfaces",
       version: "0.1.0",
       register(mctx) {
         const atlas = new TextAtlas(mctx.getDevice(), 2048);
@@ -161,7 +161,7 @@ export const gameModule: GameModule = {
   mcp: (ctx) => {
     const renderer = ctx.renderer as GameRenderer;
     createGameMcp({
-      appId: "downdraft-graphic-notes",
+      appId: "downdraft-salticus",
       surface: ctx.surface,
       isRunning: () => renderer.isRunning?.() ?? true,
       renderOnce: () => renderer.renderOnce?.(),

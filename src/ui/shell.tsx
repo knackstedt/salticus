@@ -149,10 +149,10 @@ export function mountShell(ui: HtmlUiContext, ctx: GameContext): ShellHandles {
   const openCtxMenu = (pageId: string, kind: CtxMenuKind, sx: number, sy: number) => {
     closeCtxMenu();
     const s = store.getState();
-    // No .gn-panel here — the menu is a transparent full-window overlay, so
-    // only the .gn-menu card itself paints (its backdrop is event-only).
+    // No .sc-panel here — the menu is a transparent full-window overlay, so
+    // only the .sc-menu card itself paints (its backdrop is event-only).
     menu = ui.mount(
-      `<div class="gn-col" style="width:100%;height:100%">${pageCss(tokens(s.theme), fontFaces)}${ctxMenuMarkup(s, pageId, kind, sx, sy)}</div>`,
+      `<div class="sc-col" style="width:100%;height:100%">${pageCss(tokens(s.theme), fontFaces)}${ctxMenuMarkup(s, pageId, kind, sx, sy)}</div>`,
       { id: "ctxmenu", rect: { x: 0, y: 0, w: s.windowW, h: s.windowH }, z: 60, scale: 2, zoom: s.dpr },
     );
     menu.onEvent((ev) => {
@@ -295,5 +295,5 @@ export function mountShell(ui: HtmlUiContext, ctx: GameContext): ShellHandles {
 }
 
 function wrap(inner: string, _id: string): string {
-  return `<div class="gn-panel gn-col" style="width:100%;height:100%">${inner}</div>`;
+  return `<div class="sc-panel sc-col" style="width:100%;height:100%">${inner}</div>`;
 }

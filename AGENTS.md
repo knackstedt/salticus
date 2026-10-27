@@ -1,4 +1,4 @@
-# graphic-notes — agent notes
+# salticus — agent notes
 
 ## Running
 
@@ -26,11 +26,11 @@
 ## Verification
 
 - Typecheck: `bunx tsc --noEmit`
-- Smoke suite: `GN_PID=<pid> bun run scripts/smoke.ts` — drives a running
+- Smoke suite: `SALTICUS_PID=<pid> bun run scripts/smoke.ts` — drives a running
   instance over MCP (launch it first).
 - MCP discovery: `~/.downdraft/port/<pid>` + `<pid>.token`. Other
   DownDraft projects leave stale/alien entries — probe `app_state` to
-  confirm an instance is graphic-notes before driving it.
+  confirm an instance is salticus before driving it.
 
 ## Conventions
 

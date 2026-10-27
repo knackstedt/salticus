@@ -1,4 +1,4 @@
-# graphic-notes
+# salticus
 A game built with the DownDraft Engine.
 ## Getting Started
 

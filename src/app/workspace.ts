@@ -34,7 +34,7 @@ const FLUSH_MS = 800;
 
 export function workspaceDir(): string {
   if (!wsDir) {
-    wsDir = join(resolveNativeUserDataDir("downdraft-graphic-notes"), "workspace");
+    wsDir = join(resolveNativeUserDataDir("downdraft-salticus"), "workspace");
   }
   return wsDir;
 }

@@ -1513,7 +1513,7 @@ export class WhiteboardSurface implements ScreenUiCompositor {
     this.clipboard = JSON.parse(JSON.stringify(sel)) as WbItem[];
     try {
       (navigator as { clipboard?: { writeText?: (s: string) => void } })
-        .clipboard?.writeText?.(JSON.stringify({ app: "graphic-notes", items: this.clipboard }));
+        .clipboard?.writeText?.(JSON.stringify({ app: "salticus", items: this.clipboard }));
     } catch { /* no system clipboard — internal only */ }
     if (cut) this.deleteSelection();
   }
