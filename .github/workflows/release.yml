@@ -34,6 +34,14 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
 
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm flatpak flatpak-builder
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          fpver="$(jq -r '.build.flatpak.runtimeVersion // "25.08"' package.json)"
+          flatpak install --user -y flathub "org.freedesktop.Platform//$fpver" "org.freedesktop.Sdk//$fpver"
+
       - name: Install dependencies
         run: bun install
 
@@ -60,3 +68,7 @@ jobs:
           release/salticus-linux.tar.gz
           release/salticus-mac.tar.gz
           release/salticus-win.zip
+          release/*.deb
+          release/*.rpm
+          release/*.AppImage
+          release/*.flatpak

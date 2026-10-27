@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "type": "module",
   "build": {
-    "icon": "assets/icon.png"
+    "icon": "assets/icon.png",
+    "linux": { "target": ["dir", "deb", "AppImage", "flatpak", "rpm"] },
+    "flatpak": { "runtimeVersion": "25.08" }
   },
   "scripts": {
     "dev": "draft dev",
