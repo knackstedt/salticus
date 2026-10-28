@@ -70,6 +70,9 @@ export interface WbItem {
   bindEnd?: WbBinding | null;
   /** image items: raster asset id — <workspace>/assets/<id>.png. */
   asset?: string;
+  /** Hyperlink — https://… opens externally; [[Title]] or a bare page title
+   *  opens a doc page. Followed via Ctrl+click or the context menu. */
+  link?: string;
 }
 
 export interface WbCamera {
@@ -145,6 +148,7 @@ export function normalizeWbItem(raw: Partial<WbItem> & { kind: WbItemKind }, leg
     bindStart: raw.bindStart ?? null,
     bindEnd: raw.bindEnd ?? null,
     asset: raw.asset,
+    link: typeof raw.link === "string" && raw.link ? raw.link : undefined,
   };
   if (raw.points) it.points = raw.points.slice();
   // Legacy saves kept stroke points in absolute world coords. Rebase them

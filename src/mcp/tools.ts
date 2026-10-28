@@ -38,6 +38,7 @@ export function gameMcpTools(_ctx: AppContext): McpToolRegistration[] {
         return jsonResult({
           ok: true,
           ready: surf.ready,
+          focused: surf.hasFocus,
           caret: surf.caret,
           anchor: surf.anchor,
           blocks: surf.document.blocks.length,

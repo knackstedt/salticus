@@ -68,8 +68,7 @@ function trashView(s: AppState): string {
       <span class="sc-btn" data-action="sidebar-view" data-view="pages" style="padding:1px 4px">${icon("chevron", 12)}</span>
       <span class="sc-grow">TRASH</span>
     </div>
-    <div class="sc-col" style="gap:1px;padding:0 6px">${rows}</div>
-    <div class="sc-grow"></div>`;
+    <div class="sc-col" style="gap:1px;padding:0 6px;flex:1;min-height:0;overflow-y:auto">${rows}</div>`;
 }
 
 function settingsView(s: AppState): string {
@@ -87,6 +86,11 @@ function settingsView(s: AppState): string {
       <div class="sc-row" style="gap:6px">
         <div class="sc-dim" style="font-size:12px;flex:1">Animations</div>
         <div class="sc-btn" data-action="toggle-animations" data-active="${s.editorAnimations}">${s.editorAnimations ? "On" : "Off"}</div>
+      </div>
+      <div class="sc-faint" style="font-size:11px;padding:14px 0 6px">Topbar</div>
+      <div class="sc-row" style="gap:6px">
+        <div class="sc-dim" style="font-size:12px;flex:1">Breadcrumb</div>
+        <div class="sc-btn" data-action="toggle-breadcrumb" data-active="${s.showBreadcrumb}">${s.showBreadcrumb ? "On" : "Off"}</div>
       </div>
       <div class="sc-faint" style="font-size:11px;padding:14px 0 6px">Workspace</div>
       <div class="sc-dim" style="font-size:11px">JSON workspace · autosave on</div>
@@ -112,10 +116,9 @@ export function sidebarMarkup(s: AppState): string {
         <span class="sc-btn" data-action="new-page" data-type="board" title="New board" style="padding:1px 4px">${icon("board", 12)}</span>
         <span class="sc-btn" data-action="new-page" data-type="whiteboard" title="New canvas" style="padding:1px 4px">${icon("canvas", 12)}</span>
       </div>
-      <div class="sc-col" style="gap:1px;padding:0 6px">
+      <div class="sc-col" style="gap:1px;padding:0 6px;flex:1;min-height:0;overflow-y:auto">
         ${pagesHtml}
-      </div>
-      <div class="sc-grow"></div>`;
+      </div>`;
   return `
     <div class="sc-col" style="height:${Math.round(s.windowH / s.dpr)}px;overflow:hidden">
       <div class="sc-row" style="padding:12px 10px 6px;gap:8px">
@@ -151,7 +154,7 @@ export function topbarMarkup(s: AppState): string {
     .join("");
   const active = s.activePageId ? s.pages[s.activePageId] : null;
   let crumb = "";
-  if (active) {
+  if (active && s.showBreadcrumb) {
     // Ancestor chain as a breadcrumb — e.g. "Second Note / Sub Note A".
     const chain: string[] = [];
     let cur: PageMeta | undefined = active;

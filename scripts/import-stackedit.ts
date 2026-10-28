@@ -263,7 +263,16 @@ export function mdToDoc(md: string): Doc {
       const lv = Math.min(3, m[1]!.length);
       blocks.push(block(lv === 1 ? "h1" : lv === 2 ? "h2" : "h3", m[2]!));
     } else if ((m = line.match(/^\s*>\s?(.*)$/))) {
-      blocks.push(block("quote", m[1]!));
+      // Consecutive ">" lines form one blockquote — a single quote block
+      // with embedded newlines.
+      const body = [m[1]!];
+      for (; i + 1 < lines.length;) {
+        const nm = lines[i + 1]!.match(/^\s*>\s?(.*)$/);
+        if (!nm) break;
+        body.push(nm[1]!);
+        i++;
+      }
+      blocks.push(block("quote", body.join("\n")));
     } else if ((m = line.match(/^\s*[-*+]\s+\[([ xX])\]\s+(.*)$/))) {
       blocks.push(block("todo", m[2]!, { checked: m[1]!.toLowerCase() === "x" }));
     } else if ((m = line.match(/^\s*[-*+•]\s+(.*)$/))) {

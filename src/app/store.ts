@@ -54,6 +54,8 @@ export interface AppState {
   theme: ThemeName;
   /** Cosmetic editor animations (typewriter pop, flashes, pop-ins). */
   editorAnimations: boolean;
+  /** Show the active page's ancestor breadcrumb in the topbar. */
+  showBreadcrumb: boolean;
   saveIndicator: SaveIndicator;
   /** Monotonic counters to nudge compositors/UI to redraw. */
   docVersion: number;
@@ -73,6 +75,9 @@ export interface AppState {
   renamingDraft: string;
   /** Per-view runtime handles, installed by view modules. */
   worldState?: () => unknown;
+  /** Drop editor focus — chrome panels call this on mousedown so the caret
+   *  stops blinking when the user interacts outside the document. */
+  blurEditor?: () => void;
   uiState?: () => unknown;
   setTestState?: (params: Record<string, unknown>) => void | Promise<void>;
   onReady?: (ctx: unknown) => void;
@@ -93,6 +98,7 @@ export const store = createStore<AppState>(() => ({
   dpr: 1,
   theme: "dark",
   editorAnimations: true,
+  showBreadcrumb: true,
   saveIndicator: "saved",
   docVersion: 0,
   boardVersion: 0,

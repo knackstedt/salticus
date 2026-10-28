@@ -177,6 +177,8 @@ export class EditorSurface implements ScreenUiCompositor {
   private textInputActive = false;
   private blinkPhase = -1;
   private lastAnim = false;
+  /** Focused state captured when the OS window blurs — restored on refocus. */
+  private winBlurWasFocused = false;
 
   // ── Context menu + block drag ─────────────────────────────────────────────
   private ctxMenu: CtxMenuState | null = null;
@@ -341,7 +343,24 @@ export class EditorSurface implements ScreenUiCompositor {
         this.insertText(text);
       };
       win.window?.addEventListener?.("textinput", onText);
-      this.textInputUnsub = () => win.window?.removeEventListener?.("textinput", onText);
+      // OS window focus loss — hide the caret; restore focus on return.
+      const onWinBlur = () => {
+        this.winBlurWasFocused = this.focused;
+        this.blur();
+      };
+      const onWinFocus = () => {
+        if (!this.winBlurWasFocused) return;
+        this.winBlurWasFocused = false;
+        this.focused = true;
+        this.ctx.requestFrame();
+      };
+      win.window?.addEventListener?.("blur", onWinBlur);
+      win.window?.addEventListener?.("focus", onWinFocus);
+      this.textInputUnsub = () => {
+        win.window?.removeEventListener?.("textinput", onText);
+        win.window?.removeEventListener?.("blur", onWinBlur);
+        win.window?.removeEventListener?.("focus", onWinFocus);
+      };
     } catch (e) {
       log.warn("editor", `text input unavailable: ${e}`);
     }
@@ -354,6 +373,18 @@ export class EditorSurface implements ScreenUiCompositor {
 
   focus(): void {
     this.focused = true;
+  }
+
+  /** Drop keyboard focus — the caret hides and stops blinking. Called when
+   *  the user interacts with chrome (sidebar/topbar) or the window blurs. */
+  blur(): void {
+    if (!this.focused) return;
+    this.focused = false;
+    this.history.barrier();
+    this.slash = null;
+    this.toolbar = null;
+    this.ctxMenu = null;
+    this.ctx.requestFrame();
   }
 
   /** Focus and place the caret at the end of the document — called when a doc
@@ -812,7 +843,7 @@ export class EditorSurface implements ScreenUiCompositor {
     if (!m) return;
     const target = clamp(m.pos.block, 0, Math.max(0, this.doc.blocks.length - 1));
     switch (id) {
-      case "openLink": if (m.linkTarget) openPageByTitle(m.linkTarget); return;
+      case "openLink": if (m.linkTarget) openPageByTitle(m.linkTarget, { pin: true }); return;
       case "cut": this.copy(true); return;
       case "copy": this.copy(false); return;
       case "paste": this.paste(); return;
@@ -1213,6 +1244,20 @@ export class EditorSurface implements ScreenUiCompositor {
       this.inserted();
       return;
     }
+    // In quotes, Enter inserts a newline INSIDE the block — same
+    // double-Enter-to-exit escape hatch as codeblocks.
+    if (b.kind === "quote") {
+      const text = blockText(b);
+      if (this.caret.offset === text.length && text.endsWith("\n")) {
+        spliceSpans(b, text.length - 1, 1);
+        this.doc.blocks.splice(this.caret.block + 1, 0, { id: newBlockId(), kind: "paragraph", spans: [] });
+        this.caret = { block: this.caret.block + 1, offset: 0 };
+      } else {
+        this.insertRaw("\n");
+      }
+      this.inserted();
+      return;
+    }
     // Enter on an empty non-paragraph block converts it to a paragraph
     // (exits lists/headings/quotes — Notion behavior).
     if (blockText(b).length === 0 && b.kind !== "paragraph") {
@@ -1223,7 +1268,7 @@ export class EditorSurface implements ScreenUiCompositor {
     }
     const tail = takeSpansFrom(b, this.caret.offset);
     let kind = b.kind;
-    if (kind === "h1" || kind === "h2" || kind === "h3" || kind === "quote" || kind === "callout") {
+    if (kind === "h1" || kind === "h2" || kind === "h3" || kind === "callout") {
       kind = "paragraph";
     }
     const nb: Block = { id: newBlockId(), kind, spans: tail };
@@ -1975,7 +2020,7 @@ export class EditorSurface implements ScreenUiCompositor {
   /** A blinking caret is visible — blink phase flips mark a frame via
    *  ctx.requestFrame() (see tick). */
   wantsBlink(): boolean {
-    return this.active && this.focused && !this.disposed;
+    return this.active && this.focused && !this.disposed && !store.getState().paletteOpen;
   }
 
   render(pass: GPURenderPassEncoder, surfaceW: number, surfaceH: number): void {
@@ -2086,7 +2131,7 @@ export class EditorSurface implements ScreenUiCompositor {
     }
 
     // Caret — blink: 0.53s on / 0.47s off.
-    if (this.focused && this.blinkT % 1.0 < 0.53) {
+    if (this.focused && !store.getState().paletteOpen && this.blinkT % 1.0 < 0.53) {
       p.roundedRect(ox + this.caretShownX - 1, oy + this.caretShownY, 2, this.caretH, 1, t.caret);
     }
 
@@ -2606,7 +2651,12 @@ function parseMarkdownLines(text: string): ParsedBlock[] | null {
       items.push({ kind: "codeblock", text: body.join("\n"), lang: fence[1] || "ts" });
       continue;
     }
-    items.push(itemFor(line) ?? { kind: "paragraph", text: line });
+    const it = itemFor(line) ?? { kind: "paragraph", text: line };
+    // Consecutive ">" lines are one blockquote — merge into a single
+    // multiline quote block rather than one block per line.
+    const prev = items[items.length - 1];
+    if (it.kind === "quote" && prev?.kind === "quote") prev.text += "\n" + it.text;
+    else items.push(it);
     i++;
   }
   return items.length ? items : null;

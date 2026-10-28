@@ -54,6 +54,8 @@ export function createPage(opts: { title?: string; type?: PageType; parentId?: s
   return meta;
 }
 
+/** Deliberate open — activates the page AND pins a tab for it. Used by
+ *  double-clicks, the palette, context-menu Open, and page creation. */
 export function openPage(id: string): void {
   const s = store.getState();
   if (!s.pages[id]) return;
@@ -63,15 +65,32 @@ export function openPage(id: string): void {
   });
 }
 
+/** Tentative open — activates the page without adding a tab. The tab is
+ *  pinned later by pinTab() on a deliberate open or an edit. */
+export function activatePage(id: string): void {
+  if (!store.getState().pages[id]) return;
+  store.setState({ activePageId: id });
+}
+
+/** Add a page to the tab strip (no-op when unknown or already pinned). */
+export function pinTab(id: string): void {
+  const s = store.getState();
+  if (!s.pages[id] || s.openTabs.includes(id)) return;
+  store.setState({ openTabs: [...s.openTabs, id] });
+}
+
 /** Follow a `[[Title]]` wiki-link — opens the page with that title, or
  *  creates a fresh doc with it when none exists (Obsidian-style). */
-export function openPageByTitle(title: string): void {
+export function openPageByTitle(title: string, opts: { pin?: boolean } = {}): void {
   const t = title.trim().toLowerCase();
   if (!t) return;
   const s = store.getState();
   const hit = Object.values(s.pages).find(
     (p) => !p.deleted && (p.title || "").trim().toLowerCase() === t);
-  if (hit) { openPage(hit.id); return; }
+  if (hit) {
+    if (opts.pin) openPage(hit.id); else activatePage(hit.id);
+    return;
+  }
   createPage({ title: title.trim(), type: "doc" });
 }
 

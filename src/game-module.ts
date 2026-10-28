@@ -90,6 +90,9 @@ export const gameModule: AppModule = {
         editorSurface = surf;
         kanbanSurface = board;
         wbSurface = wb;
+        // Chrome panels (html-ui) can't reach the editor's input bus — they
+        // drop its focus through this hook so the caret stops blinking.
+        store.setState({ blurEditor: () => surf.blur() });
         const s0 = store.getState();
         surf.setRect(s0.contentRect, s0.dpr);
         board.setRect(s0.contentRect, s0.dpr);
@@ -133,6 +136,7 @@ export const gameModule: AppModule = {
           governor = null;
           unsub();
           unsubAutosave();
+          store.setState({ blurEditor: undefined });
           flushNow();
           surf.dispose();
           board.dispose();

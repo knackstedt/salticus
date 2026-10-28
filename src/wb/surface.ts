@@ -39,6 +39,8 @@ import { WbImageCache, loadAssetBase64 } from "./assets";
 import { cropRgba, pdfFromRgba } from "./raster";
 import { encodePNG } from "@downdraft/platform-native";
 import { getNativeHost } from "@downdraft/engine";
+import { downdraft } from "@downdraft/engine/app/main";
+import { openPageByTitle } from "../app/actions";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { workspaceDir } from "../app/workspace";
@@ -73,6 +75,9 @@ const TOOL_TIPS: Record<string, string> = {
 
 const STROKE_WIDTHS = [1.5, 2.5, 4];
 const FONT_SIZES = [15, 20, 28, 38];
+const LINK_EDIT_FS = 13;
+const LINK_EDIT_H = 30;
+const LINK_ICON_W = 18;
 const CLOSED_KINDS: WbItemKind[] = ["rect", "diamond", "ellipse", "sticky"];
 const LINEAR_KINDS: WbItemKind[] = ["line", "arrow"];
 
@@ -102,7 +107,7 @@ interface DraftState {
 
 interface WbEdit {
   itemId: string;
-  field: "text" | "boundText";
+  field: "text" | "boundText" | "link";
   caret: number;
   anchor: number;
   isNew: boolean;
@@ -179,6 +184,7 @@ export class WhiteboardSurface implements ScreenUiCompositor {
   private propRects: { id: string; value: string; r: UiRect }[] = [];
   private zoomRects: { id: string; r: UiRect }[] = [];
   private menuRect: UiRect | null = null;
+  private linkEditRect: UiRect | null = null;
   private panelRect: UiRect | null = null;
   private handleRects: { id: string; x: number; y: number }[] = [];
   private toolbarRect: UiRect | null = null;
@@ -258,7 +264,7 @@ export class WhiteboardSurface implements ScreenUiCompositor {
         startArrow: i.startArrow, endArrow: i.endArrow,
         font: i.font, fontSize: i.fontSize, nPoints: i.points ? i.points.length / 2 : undefined,
         text: i.text, boundText: i.boundText, group: i.group,
-        bindStart: i.bindStart, bindEnd: i.bindEnd,
+        bindStart: i.bindStart, bindEnd: i.bindEnd, link: i.link,
       })),
       cam: this.wb.cam,
       tool: this.tool,
@@ -453,7 +459,9 @@ export class WhiteboardSurface implements ScreenUiCompositor {
         const wx0 = this.s2wX(e.clientX), wy0 = this.s2wY(e.clientY);
         let inside = false;
         if (it && e.button === 0) {
-          if (this.editing!.field === "boundText") {
+          if (this.editing!.field === "link") {
+            inside = hit(this.linkEditRect, e.clientX, e.clientY);
+          } else if (this.editing!.field === "boundText") {
             const f = frameOf(it, this.measure);
             const c = frameCenter(f);
             const p = it.angle ? unrot(wx0, wy0, c.x, c.y, it.angle) : { x: wx0, y: wy0 };
@@ -463,7 +471,8 @@ export class WhiteboardSurface implements ScreenUiCompositor {
           }
         }
         if (inside) {
-          this.clickToCaret(it!, e.clientX, e.clientY, e.shiftKey);
+          if (this.editing!.field === "link") this.linkClickToCaret(e.clientX, e.shiftKey);
+          else this.clickToCaret(it!, e.clientX, e.clientY, e.shiftKey);
           ctrl.stopPropagation();
           return;
         }
@@ -594,6 +603,8 @@ export class WhiteboardSurface implements ScreenUiCompositor {
           const port = this.portAt(wx, wy);
           if (port) { this.startConnector(port, wx, wy, e); return; }
           const it = this.hitAt(wx, wy);
+          // Ctrl/Cmd+click a linked item follows the link instead of moving it.
+          if (it && it.link && (e.ctrlKey || e.metaKey)) { this.followLink(it.link); return; }
           if (it) {
             // Click selects (shift toggles); groups come along.
             const mates = new Set(it.group
@@ -872,6 +883,8 @@ export class WhiteboardSurface implements ScreenUiCompositor {
         this.wb.cam.x = wx - (e.clientX - this.rect.x) / nz;
         this.wb.cam.y = wy - (e.clientY - this.rect.y) / nz;
         this.wb.cam.zoom = nz;
+      } else if (e.shiftKey) {
+        this.wb.cam.x += (e.deltaX + e.deltaY) / z;
       } else {
         this.wb.cam.x += e.deltaX / z;
         this.wb.cam.y += e.deltaY / z;
@@ -1275,15 +1288,34 @@ export class WhiteboardSurface implements ScreenUiCompositor {
     }
   }
 
-  private openEdit(it: WbItem, field: "text" | "boundText", caret: number, isNew: boolean,
+  private openEdit(it: WbItem, field: "text" | "boundText" | "link", caret: number, isNew: boolean,
     snapshot?: WbItem[]): void {
     this.editing = {
       itemId: it.id, field, caret, anchor: caret, isNew,
-      orig: (field === "text" ? it.text : it.boundText) ?? "",
+      orig: (field === "text" ? it.text : field === "boundText" ? it.boundText : it.link) ?? "",
       snapshot: snapshot ?? this.cloneItems(),
     };
     this.selected = new Set([it.id]);
     this.blinkT = 0;
+  }
+
+  /** The link field edits in a floating box under the item rather than inside
+   *  it — opened from the context menu ("Add/Edit link…"). */
+  private openLinkEdit(it: WbItem): void {
+    this.openEdit(it, "link", (it.link ?? "").length, false);
+    this.dirty();
+  }
+
+  /** Follow an item's link: [[Title]] or a bare title opens a doc page;
+   *  URLs hand off to the OS browser. */
+  private followLink(link: string): void {
+    const s = link.trim();
+    if (!s) return;
+    const wiki = s.match(/^\[\[([^\]]+)\]\]$/);
+    if (wiki) { openPageByTitle(wiki[1]!, { pin: true }); return; }
+    if (/^(?:https?|mailto|file):/i.test(s)) { downdraft.openExternal(s); return; }
+    if (/^www\./i.test(s)) { downdraft.openExternal(`https://${s}`); return; }
+    openPageByTitle(s, { pin: true });
   }
 
   private spawnText(wx: number, wy: number): void {
@@ -1306,7 +1338,9 @@ export class WhiteboardSurface implements ScreenUiCompositor {
     if (!e) return;
     this.editing = null;
     const item = this.wb.items.find((i) => i.id === e.itemId);
-    const cur = item ? ((e.field === "text" ? item.text : item.boundText) ?? "") : "";
+    const cur = item ? ((e.field === "text" ? item.text
+      : e.field === "boundText" ? item.boundText : item.link) ?? "") : "";
+    if (item && e.field === "link" && !cur.trim()) item.link = undefined;
     if (item && !cur.trim() && e.isNew) {
       this.wb.items = this.wb.items.filter((i) => i.id !== e.itemId);
       this.selected.delete(e.itemId);
@@ -1322,14 +1356,17 @@ export class WhiteboardSurface implements ScreenUiCompositor {
   private editText(): string {
     const it = this.editItem();
     if (!it || !this.editing) return "";
-    return (this.editing.field === "text" ? it.text : it.boundText) ?? "";
+    const f = this.editing.field;
+    return (f === "text" ? it.text : f === "boundText" ? it.boundText : it.link) ?? "";
   }
 
   private setEditText(s: string): void {
     const it = this.editItem();
     if (!it || !this.editing) return;
-    if (this.editing.field === "text") it.text = s;
-    else it.boundText = s;
+    const f = this.editing.field;
+    if (f === "text") it.text = s;
+    else if (f === "boundText") it.boundText = s;
+    else it.link = s;
   }
 
   insertEditTextPublic(s: string): void { this.insertEditText(s); }
@@ -1337,6 +1374,8 @@ export class WhiteboardSurface implements ScreenUiCompositor {
   private insertEditText(s: string): void {
     const e = this.editing;
     if (!e) return;
+    if (e.field === "link") s = s.replace(/[\r\n]+/g, "");
+    if (!s) return;
     const t = this.editText();
     const lo = Math.min(e.caret, e.anchor), hi = Math.max(e.caret, e.anchor);
     const next = t.slice(0, lo) + s + t.slice(hi);
@@ -1397,6 +1436,22 @@ export class WhiteboardSurface implements ScreenUiCompositor {
     this.moveCaretTo(Math.min(str.length, line.start + Math.min(col, line.str.length)), extend);
   }
 
+  /** Caret index for a click inside the floating link editor — single line,
+   *  prefix-measured like clickToCaret but against the link-edit rect. */
+  private linkClickToCaret(sx: number, extend: boolean): void {
+    const r = this.linkEditRect;
+    if (!r) return;
+    const str = this.editText();
+    const tx = sx - r.x - 10 - LINK_ICON_W;
+    let idx = str.length;
+    for (let i = 0; i <= str.length; i++) {
+      const w = this.measure("inter", LINK_EDIT_FS, str.slice(0, i));
+      const wN = this.measure("inter", LINK_EDIT_FS, str.slice(0, i + 1));
+      if (tx < (w + wN) / 2) { idx = i; break; }
+    }
+    this.moveCaretTo(idx, extend);
+  }
+
   private editKey(e: KeyboardEvent): boolean {
     const k = e.key;
     const ed = this.editing!;
@@ -1441,11 +1496,14 @@ export class WhiteboardSurface implements ScreenUiCompositor {
         this.dirty();
         return true;
       }
-      case "Enter": this.insertEditText("\n"); return true;
+      case "Enter":
+        if (ed.field === "link") this.commitEdit();
+        else this.insertEditText("\n");
+        return true;
       case "ArrowLeft": this.moveCaretTo(ed.caret - 1, e.shiftKey); return true;
       case "ArrowRight": this.moveCaretTo(ed.caret + 1, e.shiftKey); return true;
-      case "ArrowUp": this.moveCaretTo(this.lineDelta(-1), e.shiftKey); return true;
-      case "ArrowDown": this.moveCaretTo(this.lineDelta(1), e.shiftKey); return true;
+      case "ArrowUp": this.moveCaretTo(ed.field === "link" ? 0 : this.lineDelta(-1), e.shiftKey); return true;
+      case "ArrowDown": this.moveCaretTo(ed.field === "link" ? this.editText().length : this.lineDelta(1), e.shiftKey); return true;
       case "Home": this.moveCaretTo(this.lineStart(), e.shiftKey); return true;
       case "End": this.moveCaretTo(this.lineEnd(), e.shiftKey); return true;
       default:
@@ -1845,6 +1903,18 @@ export class WhiteboardSurface implements ScreenUiCompositor {
           { label: "Distribute vertically", enabled: sel.length >= 3, action: () => this.distribute("v") },
         );
       }
+      if (!multi) {
+        const it = sel[0]!;
+        entries.push("sep",
+          { label: it.link ? "Edit link…" : "Add link…", enabled: true, action: () => this.openLinkEdit(it) },
+        );
+        if (it.link) {
+          entries.push(
+            { label: "Open link", key: "Ctrl+click", enabled: true, action: () => this.followLink(it.link!) },
+            { label: "Remove link", enabled: true, action: () => { this.pushUndo(); it.link = undefined; this.dirty(); } },
+          );
+        }
+      }
       entries.push("sep",
         { label: "Delete", key: "Del", enabled: true, action: () => this.deleteSelection() },
       );
@@ -2152,7 +2222,7 @@ export class WhiteboardSurface implements ScreenUiCompositor {
       const f = frameOf(it, this.measure);
       if (f.x > vx1 || f.x + f.w < vx0 || f.y > vy1 || f.y + f.h < vy0) return;
       pt.drawItem(it, this.wb.items, {
-        edit: this.editing?.itemId === it.id
+        edit: this.editing?.itemId === it.id && this.editing.field !== "link"
           ? { field: this.editing.field, caret: this.editing.caret, anchor: this.editing.anchor, blinkOn: this.blinkT % 1 < 0.55 }
           : undefined,
       });
@@ -2192,6 +2262,8 @@ export class WhiteboardSurface implements ScreenUiCompositor {
       this.drawToolbar(pt, t);
       this.drawZoomIsland(pt, t);
       this.drawPropsPanel(pt, t);
+      this.drawLinkBadges(t);
+      if (this.editing?.field === "link") this.drawLinkEditor(pt, t);
       if (this.menu) this.drawMenu(pt, t);
       if (this.toast) this.drawToast(pt, t);
       ranges[ranges.length - 1]!.end = p.quadCount;
@@ -2710,6 +2782,71 @@ export class WhiteboardSurface implements ScreenUiCompositor {
   }
 
   // ── context menu ─────────────────────────────────────────────────────────────
+
+  /** Link badge on hovered/selected linked items — the Ctrl+click affordance. */
+  private drawLinkBadges(t: ReturnType<typeof tokens>): void {
+    const p = this.pass;
+    if (!this.wb.items.some(i => i.link)) return;
+    const hover = this.tool === "select" && !this.editing && !this.draft && !this.menu
+      ? this.hitAt(this.s2wX(this.cursor.x), this.s2wY(this.cursor.y)) : null;
+    const accent = hex(t.accent);
+    this.wb.items.forEach(it => {
+      if (!it.link || (it !== hover && !this.selected.has(it.id))) return;
+      const f = frameOf(it, this.measure);
+      const bx = this.w2sX(f.x) - 8, by = this.w2sY(f.y) - 8;
+      p.roundedRect(bx + 1, by + 2, 16, 16, 4, [0, 0, 0, 0.4]);
+      p.roundedRect(bx, by, 16, 16, 4, accent);
+      const w: Rgba = [1, 1, 1, 0.95];
+      p.capsule(bx + 5, by + 11, bx + 11, by + 5, 1.3, w);
+      p.capsule(bx + 7, by + 5, bx + 11, by + 5, 1.3, w);
+      p.capsule(bx + 11, by + 5, bx + 11, by + 9, 1.3, w);
+    });
+  }
+
+  /** Floating link editor — a single-line input docked under the item. */
+  private drawLinkEditor(pt: WbPainter, t: ReturnType<typeof tokens>): void {
+    const p = this.pass;
+    const it = this.editItem();
+    if (!it) { this.linkEditRect = null; return; }
+    const f = frameOf(it, this.measure);
+    const ed = this.editing!;
+    const str = this.editText();
+    const fs = LINK_EDIT_FS;
+    const pad = 10;
+    const textW = this.measure("inter", fs, str || "https://…  ·  [[Page Title]]");
+    const w = Math.max(260, Math.min(560, textW + pad * 2 + LINK_ICON_W + 8));
+    let x = this.w2sX(f.x), y = this.w2sY(f.y + f.h) + 8;
+    x = Math.max(this.rect.x + 8, Math.min(x, this.rect.x + this.rect.w - w - 8));
+    y = Math.max(this.rect.y + 8, Math.min(y, this.rect.y + this.rect.h - LINK_EDIT_H - 8));
+    this.linkEditRect = { x, y, w, h: LINK_EDIT_H };
+    p.roundedRect(x + 2, y + 4, w, LINK_EDIT_H, 8, [0, 0, 0, 0.45]);
+    p.roundedRect(x, y, w, LINK_EDIT_H, 8, hex(t.bgElev));
+    const oc = hex(t.line);
+    p.rect(x, y, w, 1, oc); p.rect(x, y + LINK_EDIT_H - 1, w, 1, oc);
+    p.rect(x, y, 1, LINK_EDIT_H, oc); p.rect(x + w - 1, y, 1, LINK_EDIT_H, oc);
+    // External-link glyph.
+    const ac = hex(t.accent);
+    const gx = x + pad + 6, gy = y + LINK_EDIT_H / 2;
+    p.capsule(gx - 3, gy + 3, gx + 3, gy - 3, 1.3, ac);
+    p.capsule(gx - 1, gy - 3, gx + 3, gy - 3, 1.3, ac);
+    p.capsule(gx + 3, gy - 3, gx + 3, gy + 1, 1.3, ac);
+    const tx = x + pad + LINK_ICON_W;
+    if (!str) {
+      this.pt(tx, y + 9, fs, "https://…  ·  [[Page Title]]", hex(t.textFaint), pt);
+    } else {
+      const lo = Math.min(ed.caret, ed.anchor), hi = Math.max(ed.caret, ed.anchor);
+      if (hi > lo) {
+        const lx = tx + this.measure("inter", fs, str.slice(0, lo));
+        const rx = tx + this.measure("inter", fs, str.slice(0, hi));
+        p.rect(lx, y + 7, rx - lx, 16, hex(t.selSoft));
+      }
+      this.pt(tx, y + 9, fs, str, hex(t.text), pt);
+    }
+    if (this.blinkT % 1 < 0.55) {
+      const cx = tx + this.measure("inter", fs, str.slice(0, ed.caret));
+      p.rect(cx, y + 7, 1.5, 16, ac);
+    }
+  }
 
   private drawMenu(pt: WbPainter, t: ReturnType<typeof tokens>): void {
     const p = this.pass;

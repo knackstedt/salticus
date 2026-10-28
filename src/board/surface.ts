@@ -348,12 +348,14 @@ export class KanbanSurface implements ScreenUiCompositor {
       const ci = this.hitColumn(e.clientX);
       const col = ci >= 0 ? this.board.columns[ci]! : null;
       const vMax = col ? Math.max(0, this.colContentH(col) - (this.colH(col) - HEADER_H - ADD_H)) : 0;
-      if (col && vMax > 0) {
+      if (col && vMax > 0 && !e.shiftKey) {
         const cur = this.colScroll(col.id);
         this.scroll.set(col.id, Math.max(0, Math.min(vMax, cur + e.deltaY)));
       } else {
+        // Horizontal board scroll — fallback for plain wheel, explicit under
+        // Shift (bypasses per-column vertical scrolling).
         const total = this.board.columns.length * (COL_W + COL_GAP);
-        this.offsetX = Math.max(0, Math.min(Math.max(0, total - this.rect.w + 60), this.offsetX + e.deltaY));
+        this.offsetX = Math.max(0, Math.min(Math.max(0, total - this.rect.w + 60), this.offsetX + e.deltaY + e.deltaX));
       }
     }, 55));
 

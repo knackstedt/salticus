@@ -9,6 +9,7 @@
 
 import { createLogger } from "@downdraft/engine/util/logger";
 import { store } from "./store";
+import { pinTab } from "./actions";
 import { loadPageContent, savePageContent } from "./workspace";
 import { requestThumb } from "./thumbnails";
 import type { EditorSurface } from "../editor/surface";
@@ -57,6 +58,7 @@ export function installPageController(views: ViewSurfaces): () => void {
 
   const scheduleDocSave = () => {
     if (!currentId) return;
+    pinTab(currentId); // an edit pins a previewed page into the tab strip
     pendingDoc = views.editor.document;
     store.setState({ saveIndicator: "saving" });
     if (saveTimer) clearTimeout(saveTimer);
@@ -65,6 +67,7 @@ export function installPageController(views: ViewSurfaces): () => void {
 
   const scheduleBoardSave = () => {
     if (!currentId) return;
+    pinTab(currentId);
     pendingBoard = views.kanban.getBoard();
     store.setState({ saveIndicator: "saving" });
     if (saveTimer) clearTimeout(saveTimer);
@@ -73,6 +76,7 @@ export function installPageController(views: ViewSurfaces): () => void {
 
   const scheduleWbSave = () => {
     if (!currentId) return;
+    pinTab(currentId);
     pendingWb = views.whiteboard.getContent();
     store.setState({ saveIndicator: "saving" });
     if (saveTimer) clearTimeout(saveTimer);

@@ -13,7 +13,7 @@ import type { HtmlUiContext, OsrDomEvent, UiPanelHandle } from "@downdraft/engin
 import type { AppContext } from "@downdraft/engine/app/main";
 import { createLogger } from "@downdraft/engine/util/logger";
 import { store } from "../app/store";
-import { closeAllTabs, closeOtherTabs, closeTab, createPage, deletePage, destroyPage, duplicatePage, openPage, renamePage, restorePage, toggleExpanded, toggleFavorite } from "../app/actions";
+import { activatePage, closeAllTabs, closeOtherTabs, closeTab, createPage, deletePage, destroyPage, duplicatePage, openPage, renamePage, restorePage, toggleExpanded, toggleFavorite } from "../app/actions";
 import { serveThumbs, setThumbUi } from "../app/thumbnails";
 import { chromeCss, tokens, type ThemeTokens } from "../app/theme";
 import { iconBytes } from "./icons";
@@ -180,6 +180,14 @@ export function mountShell(ui: HtmlUiContext, ctx: AppContext): ShellHandles {
       }
       return;
     }
+    // Pointer activity on chrome drops editor focus — the caret stops
+    // blinking while the user interacts with the sidebar/topbar.
+    if (ev.t === "mousedown") s.blurEditor?.();
+    // Double-click pins a page into the tab strip (single click previews).
+    if (ev.t === "dblclick" && ev.d?.action === "open-page" && ev.d.id) {
+      openPage(ev.d.id);
+      return;
+    }
     if (panel === sidebar && s.renamingId) {
       // Live draft into the store — deliberately NOT part of the chrome
       // re-render key, so the input isn't rebuilt under the user's cursor.
@@ -211,7 +219,7 @@ export function mountShell(ui: HtmlUiContext, ctx: AppContext): ShellHandles {
   const unsub = store.subscribe((s) => {
     const key = [
       s.pages, s.rootOrder, s.activePageId, s.openTabs, s.theme, s.saveIndicator,
-      s.sidebarView, s.thumbVersion, s.editorAnimations, s.renamingId,
+      s.sidebarView, s.thumbVersion, s.editorAnimations, s.renamingId, s.showBreadcrumb,
     ].map((v) => (typeof v === "object" ? JSON.stringify(v) : v)).join("|");
     if (key !== lastKey) {
       lastKey = key;
@@ -239,7 +247,8 @@ export function mountShell(ui: HtmlUiContext, ctx: AppContext): ShellHandles {
     if (d.id) toggleExpanded(d.id);
   });
   ui.onAction("open-page", (d) => {
-    if (d.id) openPage(d.id);
+    // Single click previews — no tab. Double-click (panelEvents) pins.
+    if (d.id) activatePage(d.id);
   });
   ui.onAction("close-tab", (d) => {
     if (d.id) closeTab(d.id);
@@ -265,6 +274,7 @@ export function mountShell(ui: HtmlUiContext, ctx: AppContext): ShellHandles {
   ui.onAction("toggle-palette", () => store.setState((s) => ({ paletteOpen: !s.paletteOpen })));
   ui.onAction("toggle-theme", () => store.setState((s) => ({ theme: s.theme === "dark" ? "light" : "dark" })));
   ui.onAction("toggle-animations", () => store.setState((s) => ({ editorAnimations: !s.editorAnimations })));
+  ui.onAction("toggle-breadcrumb", () => store.setState((s) => ({ showBreadcrumb: !s.showBreadcrumb })));
 
   // ── Context-menu item actions (ctx-*) — every one dismisses the menu. ──
   ui.onAction("ctx-dismiss", () => closeCtxMenu());
