@@ -236,8 +236,9 @@ export function hitItem(it: WbItem, wx: number, wy: number, tol: number,
     case "line":
     case "arrow": {
       const pts = resolvedPoints(it, items, measure);
-      for (let i = 0; i + 3 < pts.length; i += 2) {
-        if (distToSeg(p.x, p.y, pts[i]!, pts[i + 1]!, pts[i + 2]!, pts[i + 3]!) < tol + it.size) return true;
+      const sp = it.round ? curveThrough(pts) : pts;
+      for (let i = 0; i + 3 < sp.length; i += 2) {
+        if (distToSeg(p.x, p.y, sp[i]!, sp[i + 1]!, sp[i + 2]!, sp[i + 3]!) < tol + it.size) return true;
       }
       return false;
     }
@@ -245,24 +246,19 @@ export function hitItem(it: WbItem, wx: number, wy: number, tol: number,
       const rx = Math.max(f.w / 2, 0.001), ry = Math.max(f.h / 2, 0.001);
       const u = (p.x - c.x) / rx, v = (p.y - c.y) / ry;
       const d = u * u + v * v;
-      // Hit the fill when inside; hit near the outline otherwise (either side).
-      if (it.fill >= 0) return d <= 1;
+      // Closed shapes hit their whole interior (filled or not) plus an
+      // outline tolerance band on the outside.
+      if (d <= 1) return true;
       return Math.abs(Math.sqrt(d) - 1) * Math.min(rx, ry) <= tol + it.size;
     }
     case "diamond": {
       const rx = Math.max(f.w / 2, 0.001), ry = Math.max(f.h / 2, 0.001);
       const d = Math.abs((p.x - c.x) / rx) + Math.abs((p.y - c.y) / ry);
-      if (it.fill >= 0) return d <= 1;
+      if (d <= 1) return true;
       return Math.abs(d - 1) * Math.min(rx, ry) <= tol + it.size;
     }
-    case "rect": {
-      if (it.fill >= 0 || p.x < f.x || p.x > f.x + f.w || p.y < f.y || p.y > f.y + f.h) {
-        return p.x >= f.x - tol && p.x <= f.x + f.w + tol && p.y >= f.y - tol && p.y <= f.y + f.h + tol;
-      }
-      // Unfilled rect hits only near the outline.
-      const edge = Math.min(p.x - f.x, f.x + f.w - p.x, p.y - f.y, f.y + f.h - p.y);
-      return edge <= tol + it.size;
-    }
+    case "rect":
+      return p.x >= f.x - tol && p.x <= f.x + f.w + tol && p.y >= f.y - tol && p.y <= f.y + f.h + tol;
     default:
       return p.x >= f.x - tol && p.x <= f.x + f.w + tol && p.y >= f.y - tol && p.y <= f.y + f.h + tol;
   }
@@ -271,7 +267,8 @@ export function hitItem(it: WbItem, wx: number, wy: number, tol: number,
 /** Segments of an item for eraser intersection — local (unrotated) world pts. */
 export function itemSegments(it: WbItem, items: WbItem[], measure: MeasureFn): number[] {
   if (it.kind === "stroke" || it.kind === "line" || it.kind === "arrow") {
-    return resolvedPoints(it, items, measure);
+    const pts = resolvedPoints(it, items, measure);
+    return it.round && it.kind !== "stroke" ? curveThrough(pts) : pts;
   }
   const f = frameOf(it, measure);
   if (it.kind === "ellipse") {
@@ -305,6 +302,31 @@ export function eraserHits(it: WbItem, wx: number, wy: number, r: number,
     if (distToSeg(p.x, p.y, seg[i]!, seg[i + 1]!, seg[i + 2]!, seg[i + 3]!) < r + it.size / 2) return true;
   }
   return false;
+}
+
+/** Densified smooth polyline through `pts` (uniform Catmull-Rom) — used for
+ *  round-edged line/arrow items, both for rendering and hit-testing. */
+export function curveThrough(pts: number[]): number[] {
+  const n = pts.length / 2;
+  if (n < 3) return pts.slice();
+  const P = (i: number): Pt => {
+    const j = i < 0 ? 0 : i >= n ? n - 1 : i;
+    return { x: pts[j * 2]!, y: pts[j * 2 + 1]! };
+  };
+  const out: number[] = [];
+  for (let i = 0; i < n - 1; i++) {
+    const p0 = P(i - 1), p1 = P(i), p2 = P(i + 1), p3 = P(i + 2);
+    const len = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+    const steps = Math.max(4, Math.min(32, Math.round(len / 8)));
+    for (let s = i === 0 ? 0 : 1; s <= steps; s++) {
+      const t = s / steps, t2 = t * t, t3 = t2 * t;
+      out.push(
+        0.5 * (2 * p1.x + (p2.x - p0.x) * t + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 + (3 * p1.x - p0.x - 3 * p2.x + p3.x) * t3),
+        0.5 * (2 * p1.y + (p2.y - p0.y) * t + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 + (3 * p1.y - p0.y - 3 * p2.y + p3.y) * t3),
+      );
+    }
+  }
+  return out;
 }
 
 // ── snapping ────────────────────────────────────────────────────────────────

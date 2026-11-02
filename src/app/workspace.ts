@@ -166,6 +166,7 @@ export function savePageContent(id: string, content: PageContent): void {
   try {
     mkdirSync(join(workspaceDir(), "pages"), { recursive: true });
     atomicWrite(pagePath(id), JSON.stringify(content, null, 1));
+    searchTextCache.set(id, contentText(content));
     const s = store.getState();
     const p = s.pages[id];
     if (p) store.setState({ pages: { ...s.pages, [id]: { ...p, updatedAt: Date.now() } } });
@@ -176,6 +177,7 @@ export function savePageContent(id: string, content: PageContent): void {
 }
 
 export function deletePageFile(id: string): void {
+  searchTextCache.delete(id);
   try {
     if (existsSync(pagePath(id))) unlinkSync(pagePath(id));
   } catch { /* best-effort */ }
@@ -245,7 +247,21 @@ function contentText(c: PageContent): string {
   return out;
 }
 
-/** Search page titles + content text. Non-deleted pages only. */
+/** Search page titles + content text. Non-deleted pages only.
+ *  Content text is cached in memory — the palette re-queries on every
+ *  keystroke, and readFileSync+JSON.parse of every page per keystroke was a
+ *  major churn/latency source. Saves and deletes keep the cache coherent. */
+const searchTextCache = new Map<string, string>();
+
+function cachedSearchText(id: string): string {
+  const hit = searchTextCache.get(id);
+  if (hit !== undefined) return hit;
+  const c = loadPageContent(id);
+  const text = c ? contentText(c) : "";
+  searchTextCache.set(id, text);
+  return text;
+}
+
 export function searchPages(query: string): PageHit[] {
   const q = query.trim().toLowerCase();
   const s = store.getState();
@@ -255,9 +271,8 @@ export function searchPages(query: string): PageHit[] {
     if (!q) { hits.push({ pageId: p.id, title: p.title, type: p.type, snippet: null }); continue; }
     const titleHit = (p.title || "").toLowerCase().includes(q);
     let snippet: string | null = null;
-    const c = loadPageContent(p.id);
-    if (c) {
-      const text = contentText(c);
+    const text = cachedSearchText(p.id);
+    if (text) {
       const idx = text.toLowerCase().indexOf(q);
       if (idx >= 0) {
         snippet = text.slice(Math.max(0, idx - 30), idx + q.length + 50).replace(/\n+/g, " · ").trim();
@@ -268,13 +283,15 @@ export function searchPages(query: string): PageHit[] {
   return hits;
 }
 
-/** Subscribe: workspace metadata autosaves on relevant store changes. */
+/** Subscribe: workspace metadata autosaves on relevant store changes. The
+ *  store is immutable-updated, so a reference check on the persisted slices
+ *  is a complete change test — no per-notification serialization. */
 export function installAutosave(): () => void {
-  let last = "";
+  let prev: unknown[] | null = null;
   const unsub = store.subscribe((s) => {
-    const key = JSON.stringify([s.pages, s.rootOrder, s.openTabs, s.activePageId]);
-    if (key === last) return;
-    last = key;
+    const cur = [s.pages, s.rootOrder, s.openTabs, s.activePageId];
+    if (prev && cur.every((v, i) => v === prev![i])) return;
+    prev = cur;
     dirtyMeta = true;
     if (flushTimer) clearTimeout(flushTimer);
     flushTimer = setTimeout(flushNow, FLUSH_MS);

@@ -41,6 +41,7 @@ export class GpuTextPass {
   private bindGroupLayout: GPUBindGroupLayout;
   private sampler: GPUSampler;
   private data = new Float32Array(INITIAL_CAPACITY * FLOATS_PER_INSTANCE);
+  private uniformData = new Float32Array(4);
   private count = 0;
   private bindGroups = new Map<TextAtlas, GPUBindGroup>();
   /** Per-quad atlas override — indexed by quad slot; null = default atlas. */
@@ -212,8 +213,10 @@ export class GpuTextPass {
       return bg;
     };
     // The projection maps logical surface px → NDC; scissors are physical.
-    this.device.queue.writeBuffer(this.uniformBuf, 0,
-      new Float32Array([surfaceW / scale, surfaceH / scale, time, 0]));
+    this.uniformData[0] = surfaceW / scale;
+    this.uniformData[1] = surfaceH / scale;
+    this.uniformData[2] = time;
+    this.device.queue.writeBuffer(this.uniformBuf, 0, this.uniformData);
     this.device.queue.writeBuffer(this.instanceBuf, 0, this.data, 0, this.count * FLOATS_PER_INSTANCE);
     pass.setPipeline(this.pipeline);
     let boundAtlas: TextAtlas | null = null;

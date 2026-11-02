@@ -88,6 +88,8 @@ export interface WbContent {
   cam: WbCamera;
   /** Dot grid on/off (default on). */
   grid?: boolean;
+  /** Grid spacing in world px (default 22). Move/resize snap to it. */
+  gridSize?: number;
 }
 
 /** Font size (world px) for an item's text: `fontSize` on containers with
@@ -217,6 +219,8 @@ export function normalizeWbContent(raw: unknown): WbContent {
     items: (c?.items ?? []).map((i) => normalizeWbItem(i as WbItem, legacy)),
     cam: c?.cam ? { x: c.cam.x ?? 0, y: c.cam.y ?? 0, zoom: c.cam.zoom ?? 1 } : { x: 0, y: 0, zoom: 1 },
     grid: c?.grid ?? true,
+    gridSize: typeof c?.gridSize === "number" && c.gridSize >= 4 && c.gridSize <= 512
+      ? c.gridSize : undefined,
   };
 }
 

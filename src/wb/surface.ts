@@ -23,7 +23,7 @@ import { tokens } from "../app/theme";
 import { newId, store } from "../app/store";
 import {
   emptyWhiteboard, newWbItem, normalizeLinear, normalizeStroke, normalizeWbContent,
-  wbFontSize,
+  normalizeWbItem, wbFontSize,
   type WbArrowhead, type WbContent, type WbItem, type WbItemKind,
 } from "./model";
 import {
@@ -80,6 +80,7 @@ const LINK_EDIT_H = 30;
 const LINK_ICON_W = 18;
 const CLOSED_KINDS: WbItemKind[] = ["rect", "diamond", "ellipse", "sticky"];
 const LINEAR_KINDS: WbItemKind[] = ["line", "arrow"];
+const GRID_SIZES = [10, 14, 22, 32, 48, 72, 110, 160];
 
 // ── drafts / edits ───────────────────────────────────────────────────────────
 
@@ -93,7 +94,7 @@ interface DraftState {
   camStart?: { x: number; y: number };
   handle?: string;              // resize handle id
   resizeItems?: { it: WbItem; f: Frame }[];
-  box0?: Frame;                 // pre-drag selection box (resize/rotate)
+  box0?: Frame;                 // pre-drag selection box (move/resize/rotate)
   angle0?: number;              // pointer angle at rotate start
   itemsAngle0?: number[];       // per-item angles for multi-rotate
   marqueeAdd?: boolean;
@@ -280,6 +281,7 @@ export class WhiteboardSurface implements ScreenUiCompositor {
       undoDepth: this.undoStack.length,
       redoDepth: this.redoStack.length,
       grid: this.wbGrid,
+      gridSize: this.gridSize,
     };
   }
 
@@ -316,6 +318,11 @@ export class WhiteboardSurface implements ScreenUiCompositor {
   }
   private get wbGrid(): boolean {
     return this.wb.grid !== false;
+  }
+  /** Grid spacing in world px — drives both the dot grid and snapping. */
+  private get gridSize(): number {
+    const g = this.wb.gridSize;
+    return g && g >= 4 && g <= 512 ? g : 22;
   }
 
   // ── history ────────────────────────────────────────────────────────────────
@@ -680,22 +687,33 @@ export class WhiteboardSurface implements ScreenUiCompositor {
         }
         case "move": {
           if (!d.moved) break;
-          let dx = wx - d.startWX, dy = wy - d.startWY;
           const sel = this.selectionItems();
-          if (sel.length && !e.altKey) {
-            const box = this.selectionBox();
-            if (box) {
-              const drag = { x: box.f.x + dx, y: box.f.y + dy, w: box.f.w, h: box.f.h };
+          // Pin base positions + the pre-drag box once. Snapping must be
+          // measured against the unmoved box — recomputing it from the
+          // already-moved items feeds prior deltas back into the snap and
+          // the dragged item oscillates between snap points.
+          if (!d.moveBase) {
+            d.moveBase = new Map(sel.map((i) => [i.id, { x: i.x, y: i.y }]));
+            const b = this.selectionBox();
+            d.box0 = b ? { ...b.f } : undefined;
+          }
+          let dx = wx - d.startWX, dy = wy - d.startWY;
+          if (sel.length && !e.altKey && d.box0) {
+            const f0 = d.box0;
+            if (this.wbGrid) {
+              // Grid on → snap the dragged box's origin to grid lines.
+              const g = this.gridSize;
+              dx += Math.round((f0.x + dx) / g) * g - (f0.x + dx);
+              dy += Math.round((f0.y + dy) / g) * g - (f0.y + dy);
+              this.snapGuide = null;
+            } else {
+              const drag = { x: f0.x + dx, y: f0.y + dy, w: f0.w, h: f0.h };
               const others = this.wb.items.filter((i) => !sel.includes(i))
                 .map((i) => this.aabbOf(i));
               const s = snapDelta(drag, others, 6 / z);
               dx += s.dx; dy += s.dy;
               this.snapGuide = (s.gx !== null || s.gy !== null) ? { gx: s.gx, gy: s.gy } : null;
             }
-          }
-          // Translate from pre-drag positions.
-          if (!d.moveBase) {
-            d.moveBase = new Map(sel.map((i) => [i.id, { x: i.x, y: i.y }]));
           }
           sel.forEach(it => {
             const b = d.moveBase!.get(it.id)!;
@@ -704,7 +722,7 @@ export class WhiteboardSurface implements ScreenUiCompositor {
           });
           break;
         }
-        case "resize": this.resizeMove(wx, wy, e.shiftKey); break;
+        case "resize": this.resizeMove(wx, wy, e.shiftKey, e.altKey); break;
         case "rotate": this.rotateMove(wx, wy, e.shiftKey); break;
         case "vertex": {
           const it = d.item!;
@@ -712,6 +730,11 @@ export class WhiteboardSurface implements ScreenUiCompositor {
           const f = frameOf(it, this.measure);
           const c = frameCenter(f);
           const l = it.angle ? unrot(wx, wy, c.x, c.y, it.angle) : { x: wx, y: wy };
+          if (this.wbGrid && !it.angle && !e.altKey) {
+            const g = this.gridSize;
+            l.x = Math.round(l.x / g) * g;
+            l.y = Math.round(l.y / g) * g;
+          }
           pts[d.vIdx! * 2] = l.x - it.x;
           pts[d.vIdx! * 2 + 1] = l.y - it.y;
           break;
@@ -1396,6 +1419,23 @@ export class WhiteboardSurface implements ScreenUiCompositor {
     return true;
   }
 
+  /** Selected text of the active edit session ("" when collapsed). */
+  private editSelText(): string {
+    const e = this.editing!;
+    const t = this.editText();
+    return t.slice(Math.min(e.caret, e.anchor), Math.max(e.caret, e.anchor));
+  }
+
+  private clipSet(text: string): void {
+    const nw = (globalThis as { __nativeWindow?: { setClipboardText?: (t: string) => void } }).__nativeWindow;
+    try { nw?.setClipboardText?.(text); } catch { /* no system clipboard */ }
+  }
+
+  private clipGet(): string {
+    const nw = (globalThis as { __nativeWindow?: { getClipboardText?: () => string } }).__nativeWindow;
+    try { return nw?.getClipboardText?.() ?? ""; } catch { return ""; }
+  }
+
   private moveCaretTo(idx: number, extend: boolean): void {
     const e = this.editing!;
     idx = Math.max(0, Math.min(this.editText().length, idx));
@@ -1460,7 +1500,14 @@ export class WhiteboardSurface implements ScreenUiCompositor {
     if (ctrl) {
       switch (k.toLowerCase()) {
         case "a": ed.anchor = 0; ed.caret = this.editText().length; return true;
-        case "c": return true; // selection copy — clipboard handled app-wide
+        case "c": this.clipSet(this.editSelText()); return true;
+        case "x": this.clipSet(this.editSelText()); if (this.deleteSel()) this.dirty(); return true;
+        case "v": {
+          // oxlint-disable-next-line no-control-regex — strip control chars
+          const t = this.clipGet().replace(/\r\n?/g, "\n").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, "");
+          if (t) this.insertEditText(t);
+          return true;
+        }
         case "z": this.commitEdit(); this.undo(); return true;
         case "y": this.commitEdit(); this.redo(); return true;
         case "arrowleft": this.moveCaretTo(this.wordEdge(-1), e.shiftKey); return true;
@@ -1577,15 +1624,21 @@ export class WhiteboardSurface implements ScreenUiCompositor {
     const sel = this.selectionItems();
     if (!sel.length) return;
     this.clipboard = JSON.parse(JSON.stringify(sel)) as WbItem[];
-    try {
-      (navigator as { clipboard?: { writeText?: (s: string) => void } })
-        .clipboard?.writeText?.(JSON.stringify({ app: "salticus", items: this.clipboard }));
-    } catch { /* no system clipboard — internal only */ }
+    this.clipSet(JSON.stringify({ app: "salticus", items: this.clipboard }));
     if (cut) this.deleteSelection();
   }
 
   private paste(): void {
-    const src = this.clipboard;
+    let src = this.clipboard;
+    if (!src.length) {
+      // Cross-window/session paste: recover items from the OS clipboard JSON.
+      try {
+        const raw = JSON.parse(this.clipGet()) as { app?: string; items?: Partial<WbItem>[] } | null;
+        if (raw && raw.app === "salticus" && Array.isArray(raw.items)) {
+          src = raw.items.map(i => normalizeWbItem(i as WbItem));
+        }
+      } catch { /* not ours */ }
+    }
     if (!src.length) return;
     this.pushUndo();
     const box = combineAABBs(src.map((i) => frameOf(i, this.measure)));
@@ -1757,7 +1810,7 @@ export class WhiteboardSurface implements ScreenUiCompositor {
 
   // ── resize / rotate ─────────────────────────────────────────────────────────
 
-  private resizeMove(wx: number, wy: number, shift: boolean): void {
+  private resizeMove(wx: number, wy: number, shift: boolean, alt: boolean): void {
     const d = this.draft;
     if (!d || d.kind !== "resize" || !d.box0 || !d.resizeItems) return;
     const F0 = d.box0;
@@ -1768,6 +1821,13 @@ export class WhiteboardSurface implements ScreenUiCompositor {
     const p = angle ? unrot(wx, wy, c0.x, c0.y, angle) : { x: wx, y: wy };
     const m = this.handleMask(d.handle!);
     const min = 4;
+
+    // Grid on → the dragged edges land on grid lines (unrotated frames only).
+    if (this.wbGrid && !angle && !alt) {
+      const g = this.gridSize;
+      if (m.ex !== 0) p.x = Math.round(p.x / g) * g;
+      if (m.ey !== 0) p.y = Math.round(p.y / g) * g;
+    }
 
     // Anchor = opposite edge (local coords).
     const ax = m.ex < 0 ? F0.x + F0.w : m.ex > 0 ? F0.x : F0.x + F0.w / 2;
@@ -1925,7 +1985,9 @@ export class WhiteboardSurface implements ScreenUiCompositor {
         "sep",
         { label: "Zoom to fit", key: "Shift+1", enabled: this.wb.items.length > 0, action: () => this.zoomToFit() },
         { label: "Reset zoom", key: "Ctrl+0", enabled: true, action: () => this.zoomReset() },
-        { label: this.wbGrid ? "Hide grid" : "Show grid", enabled: true, action: () => { this.wb.grid = !this.wbGrid; this.dirty(); } },
+        { label: `${this.wbGrid ? "Hide" : "Show"} grid (${this.gridSize}px)`, enabled: true, action: () => { this.wb.grid = !this.wbGrid; this.dirty(); } },
+        { label: "Grid: smaller", enabled: this.gridSize > GRID_SIZES[0]!, action: () => this.stepGrid(-1) },
+        { label: "Grid: larger", enabled: this.gridSize < GRID_SIZES[GRID_SIZES.length - 1]!, action: () => this.stepGrid(1) },
         "sep",
         { label: "Export as SVG", enabled: this.wb.items.length > 0, action: () => void this.exportWb("svg") },
         { label: "Export as PNG", enabled: this.wb.items.length > 0, action: () => void this.exportWb("png") },
@@ -1962,6 +2024,17 @@ export class WhiteboardSurface implements ScreenUiCompositor {
     else if (id === "zout") this.zoomStep(1 / 1.25);
     else if (id === "zlabel") this.zoomReset();
     else if (id === "zfit") this.zoomToFit();
+  }
+
+  /** Step the grid spacing through the preset sizes. */
+  private stepGrid(dir: -1 | 1): void {
+    const cur = this.gridSize;
+    let idx = 0;
+    for (let i = 0; i < GRID_SIZES.length; i++) {
+      if (Math.abs(GRID_SIZES[i]! - cur) < Math.abs(GRID_SIZES[idx]! - cur)) idx = i;
+    }
+    this.wb.gridSize = GRID_SIZES[Math.max(0, Math.min(GRID_SIZES.length - 1, idx + dir))];
+    this.dirty();
   }
 
   private zoomStep(k: number): void {
@@ -2024,8 +2097,12 @@ export class WhiteboardSurface implements ScreenUiCompositor {
       }
       case "fillStyle": {
         this.style.fillStyle = value as WbItem["fillStyle"];
-        forEach((i) => i.kind !== "sticky" && CLOSED_KINDS.includes(i.kind),
-          (it) => { it.fillStyle = value as WbItem["fillStyle"]; });
+        forEach((i) => i.kind !== "sticky" && CLOSED_KINDS.includes(i.kind), (it) => {
+          it.fillStyle = value as WbItem["fillStyle"];
+          // A fill style on an unfilled shape is invisible — adopt the
+          // current fill color (or the stroke's matching fill swatch).
+          if (it.fill < 0) it.fill = this.style.fill >= 0 ? this.style.fill : it.color;
+        });
         break;
       }
       case "sw": {
@@ -2199,7 +2276,7 @@ export class WhiteboardSurface implements ScreenUiCompositor {
     // Dot grid — finer than before; adaptive level-of-detail so dots never
     // moiré when zoomed out. Hidden in exports.
     if (this.wbGrid && !this.exportClean) {
-      let spacing = 22 * z;
+      let spacing = this.gridSize * z;
       for (; spacing < 9; spacing *= 4) {} // drop to a coarser level
       if (spacing >= 9) {
         const dot = hex(t.line);
@@ -2405,10 +2482,11 @@ export class WhiteboardSurface implements ScreenUiCompositor {
 
   private drawToolbar(pt: WbPainter, t: ReturnType<typeof tokens>): void {
     const p = this.pass;
-    const btn = 30, pad = 5;
+    // Shrink buttons on narrow canvases so the island never overflows.
+    const btn = this.rect.w < 560 ? 24 : 30, pad = 5;
     const toolsW = TOOLS.length * (btn + 2);
-    const w = pad * 2 + 24 + 10 + toolsW + 10 + 2 * (btn + 2) + 10 + (btn + 2);
-    const x = this.rect.x + (this.rect.w - w) / 2;
+    const w = pad * 2 + (btn + 2) + 10 + toolsW + 10 + 2 * (btn + 2) + 10 + (btn + 2);
+    const x = Math.max(this.rect.x + 8, this.rect.x + (this.rect.w - w) / 2);
     const y = this.rect.y + 8;
     this.island(x, y, w, 42, t);
     this.toolbarRect = { x, y, w, h: 42 };
@@ -2593,7 +2671,7 @@ export class WhiteboardSurface implements ScreenUiCompositor {
     const cur = sel.length === 1 ? sel[0]! : null;
 
     const row = (label: string, h: number, draw: (y: number) => void) => rows.push({ label, h, draw });
-    const W = 196, x = this.rect.x + 10;
+    const W = 224, x = this.rect.x + 10;
     const segW = 26;
 
     const segRow = (label: string, id: string,

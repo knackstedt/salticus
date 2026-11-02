@@ -13,6 +13,7 @@ import { RunCache } from "../text/run-cache";
 import { TextAtlas } from "../text/atlas";
 import { tokens } from "../app/theme";
 import { store } from "../app/store";
+import { hex } from "../text/color";
 import { newCard, newColumn, type BoardContent, type BoardCard, type BoardColumn } from "./model";
 
 const COL_W = 272;
@@ -36,13 +37,6 @@ const TAG_COLORS: Rgba[] = [
   [0.32, 0.29, 0.52, 1], [0.20, 0.36, 0.52, 1], [0.46, 0.32, 0.18, 1],
   [0.22, 0.40, 0.26, 1], [0.45, 0.24, 0.26, 1],
 ];
-
-function hex(s: string): Rgba {
-  const h = s.slice(1);
-  const n = parseInt(h.slice(0, 6), 16);
-  const a = h.length >= 8 ? parseInt(h.slice(6, 8), 16) / 255 : 1;
-  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255, a];
-}
 
 interface DragState {
   card: BoardCard;
@@ -82,6 +76,9 @@ export class KanbanSurface implements ScreenUiCompositor {
   private time = 0;
   private lastTickMs = 0;
   private hoverCard: string | null = null;
+  /** Wrapped desc lines per card — shaping lookups are expensive, so cache
+   *  by card text (column width is constant). Bounded; oldest evicts. */
+  private descCache = new Map<string, string[]>();
   /** Engine damage-gate mark for mutations that don't ride a store/input
    *  wake — set in dirty() and the setters below. */
   private framePending = true;
@@ -154,6 +151,8 @@ export class KanbanSurface implements ScreenUiCompositor {
   }
 
   private descLines(c: BoardCard): string[] {
+    const hit = this.descCache.get(c.desc);
+    if (hit) return hit;
     const maxW = COL_W - CARD_PAD * 2;
     const lines: string[] = [];
     for (const para of c.desc.split("\n")) {
@@ -165,6 +164,11 @@ export class KanbanSurface implements ScreenUiCompositor {
       }
       lines.push(cur);
     }
+    if (this.descCache.size >= 256) {
+      const oldest = this.descCache.keys().next().value;
+      if (oldest !== undefined) this.descCache.delete(oldest);
+    }
+    this.descCache.set(c.desc, lines);
     return lines;
   }
 

@@ -15,17 +15,11 @@ import { tokens } from "../app/theme";
 import { store, type PageType } from "../app/store";
 import { searchPages } from "../app/workspace";
 import { createPage, openPage } from "../app/actions";
+import { hex } from "../text/color";
 
 const PANEL_W = 560;
 const ROW_H = 40;
 const MAX_ROWS = 8;
-
-function hex(s: string): Rgba {
-  const h = s.slice(1);
-  const n = parseInt(h.slice(0, 6), 16);
-  const a = h.length >= 8 ? parseInt(h.slice(6, 8), 16) / 255 : 1;
-  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255, a];
-}
 
 interface PaletteRow {
   kind: "page" | "command";
@@ -262,10 +256,14 @@ export class PaletteSurface implements ScreenUiCompositor {
       this.text(px + 18, ry + 12, "inter:600:normal", 11, iconTxt, iconColor);
       this.text(px + 38, ry + 10, "inter:500:normal", 13, r.label, hex(t.text));
       if (r.sub) {
-        const avail = PANEL_W - 60 - this.measure("inter:500:normal", 13, r.label) - 20;
+        const labelW = this.measure("inter:500:normal", 13, r.label);
+        const avail = PANEL_W - 60 - labelW - 20;
         let snip = r.sub;
-        while (snip.length > 8 && this.measure("inter:400:normal", 11, snip + "…") > avail) snip = snip.slice(0, -1);
-        this.text(px + 38 + this.measure("inter:500:normal", 13, r.label) + 12, ry + 12,
+        // Trailing trim: drop one char at a time until the snippet fits.
+        for (let len = snip.length; len > 8 && this.measure("inter:400:normal", 11, snip + "…") > avail; len--) {
+          snip = snip.slice(0, len - 1);
+        }
+        this.text(px + 38 + labelW + 12, ry + 12,
           "inter:400:normal", 11, snip + (snip === r.sub ? "" : "…"), hex(t.textFaint));
       }
       ry += ROW_H;

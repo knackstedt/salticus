@@ -214,17 +214,19 @@ export function mountShell(ui: HtmlUiContext, ctx: AppContext): ShellHandles {
     if (s.renamingId) sidebar.focus("[data-rename-input]");
   }
 
-  // Selective re-render: only when chrome-relevant state changes.
-  let lastKey = "";
+  // Selective re-render: only when chrome-relevant state changes. The store
+  // is updated immutably, so reference equality on the relevant slices is a
+  // complete change check — no per-notification JSON.stringify of the whole
+  // page tree.
+  let prevChrome: unknown[] | null = null;
   const unsub = store.subscribe((s) => {
-    const key = [
+    const cur = [
       s.pages, s.rootOrder, s.activePageId, s.openTabs, s.theme, s.saveIndicator,
       s.sidebarView, s.thumbVersion, s.editorAnimations, s.renamingId, s.showBreadcrumb,
-    ].map((v) => (typeof v === "object" ? JSON.stringify(v) : v)).join("|");
-    if (key !== lastKey) {
-      lastKey = key;
-      rerender();
-    }
+    ];
+    if (prevChrome && cur.every((v, i) => v === prevChrome![i])) return;
+    prevChrome = cur;
+    rerender();
   });
   ui.onDispose(unsub);
 

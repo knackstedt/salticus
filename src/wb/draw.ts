@@ -9,12 +9,13 @@
 
 import type { GpuTextPass, Rgba } from "../text/gpu-text";
 import type { RunCache } from "../text/run-cache";
+import { hex, withAlpha } from "../text/color";
 import { FALLBACK_FACES } from "../text/fonts";
 import type { TextAtlas, AtlasRegion } from "../text/atlas";
 import type { ThemeTokens } from "../app/theme";
 import { wbFontSize, type WbItem } from "./model";
 import {
-  frameOf, frameCenter, resolvedPoints, faceFor, LINE_H,
+  frameOf, frameCenter, resolvedPoints, faceFor, LINE_H, curveThrough,
   type MeasureFn, type Frame,
 } from "./geometry";
 
@@ -49,16 +50,7 @@ export const STICKY_COLORS: Rgba[] = [
   [0.34, 0.28, 0.46, 1],
 ];
 
-export function hex(s: string): Rgba {
-  const h = s.slice(1);
-  const n = parseInt(h.slice(0, 6), 16);
-  const a = h.length >= 8 ? parseInt(h.slice(6, 8), 16) / 255 : 1;
-  return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255, a];
-}
-
-export function withAlpha(c: Rgba, a: number): Rgba {
-  return [c[0], c[1], c[2], c[3] * a];
-}
+export { hex, withAlpha };
 
 // ── seeded rng (deterministic wobble) ───────────────────────────────────────
 
@@ -399,6 +391,26 @@ export class WbPainter {
     }
   }
 
+  /** Sketchy smooth curve through linear points (screen px): jitters the
+   *  control points per pass, then smooths — curves keep their bend instead
+   *  of collapsing into jittered hard angles. */
+  private roughCurve(pts: number[], seed: string, lw: number, color: Rgba,
+    roughness: number, dash?: number[] | "dot"): void {
+    const passes = roughness <= 0 ? 1 : 2;
+    const jitter = roughness <= 0 ? 0.25 : roughness === 1 ? 1.15 : 2.3;
+    for (let i = 0; i < passes; i++) {
+      const rnd = mulberry32(hash32(seed) + i * 7919);
+      const n = pts.length / 2;
+      const cp: number[] = [];
+      for (let j = 0; j < n; j++) {
+        const end = j === 0 || j === n - 1;
+        const jj = end ? jitter * 0.35 : jitter;
+        cp.push(pts[j * 2]! + (rnd() - 0.5) * 2 * jj, pts[j * 2 + 1]! + (rnd() - 0.5) * 2 * jj);
+      }
+      this.strokePath(curveThrough(cp), lw, i === 1 ? withAlpha(color, 0.85) : color, dash);
+    }
+  }
+
   /** Convex-polygon scanline fill (diamond, triangle). Screen-px vertices. */
   fillPoly(pts: number[], color: Rgba): void {
     const p = this.pass;
@@ -559,15 +571,18 @@ export class WbPainter {
       case "rect": {
         const [sx, sy] = this.s(f.x, f.y);
         const w = f.w * z, h = f.h * z;
-        const rad = it.round ? Math.min(w, h) * 0.16 : 0;
+        // Corner radius in WORLD units — rectCorners applies zoom itself, so
+        // the stroke outline and the fill round the same amount at every zoom.
+        const radW = it.round ? Math.min(f.w, f.h) * 0.16 : 0;
+        const radS = radW * z;
         if (fillCA) {
           if (it.fillStyle === "solid") {
-            if (rad > 1) p.roundedRect(sx, sy, w, h, rad, fillCA); else p.rect(sx, sy, w, h, fillCA);
+            if (radS > 1) p.roundedRect(sx, sy, w, h, radS, fillCA); else p.rect(sx, sy, w, h, fillCA);
           } else {
             this.hachure("rect", f, it.id, withAlpha(fillCA, 0.8), it.fillStyle === "cross", lw * 0.6, it.roughness);
           }
         }
-        const corners = rectCorners(f, rad, this);
+        const corners = rectCorners(f, radW, this);
         this.roughStroke(corners, it.id, true, lw, strokeC, it.roughness, dashPat);
         this.boundText(it, opts, c);
         break;
@@ -607,16 +622,19 @@ export class WbPainter {
         if (pts.length < 4) break;
         const sp: number[] = [];
         for (let i = 0; i + 1 < pts.length; i += 2) sp.push(this.w2sX(pts[i]!), this.w2sY(pts[i + 1]!));
-        this.roughStroke(sp, it.id, false, lw, strokeC, it.roughness, dashPat);
+        if (it.round) this.roughCurve(sp, it.id, lw, strokeC, it.roughness, dashPat);
+        else this.roughStroke(sp, it.id, false, lw, strokeC, it.roughness, dashPat);
+        // Arrowhead tangents follow the smoothed curve.
+        const cp = it.round ? curveThrough(pts) : pts;
         const head = it.kind === "arrow" ? (it.endArrow ?? "arrow") : it.endArrow;
         const tail = it.kind === "arrow" ? (it.startArrow ?? "none") : it.startArrow;
         if (head && head !== "none") {
-          const a = Math.atan2(pts[pts.length - 1]! - pts[pts.length - 3]!, pts[pts.length - 2]! - pts[pts.length - 4]!);
-          this.arrowhead(head, pts[pts.length - 2]!, pts[pts.length - 1]!, a, lw, strokeC, it.roughness);
+          const a = Math.atan2(cp[cp.length - 1]! - cp[cp.length - 3]!, cp[cp.length - 2]! - cp[cp.length - 4]!);
+          this.arrowhead(head, cp[cp.length - 2]!, cp[cp.length - 1]!, a, lw, strokeC, it.roughness);
         }
         if (tail && tail !== "none") {
-          const a = Math.atan2(pts[1]! - pts[3]!, pts[0]! - pts[2]!);
-          this.arrowhead(tail, pts[0]!, pts[1]!, a, lw, strokeC, it.roughness);
+          const a = Math.atan2(cp[1]! - cp[3]!, cp[0]! - cp[2]!);
+          this.arrowhead(tail, cp[0]!, cp[1]!, a, lw, strokeC, it.roughness);
         }
         this.boundText(it, opts, c);
         break;

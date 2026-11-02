@@ -37,6 +37,10 @@
 - TypeScript everywhere; avoid `for..of` and `while` loops (use `.forEach`
   or indexed `for`).
 - No Devin co-author trailer in commits.
+- Store updates are immutable — subscribers should compare slice
+  references, never `JSON.stringify` per notification. `searchPages` uses
+  an in-memory content-text cache kept coherent by
+  `savePageContent`/`deletePageFile`.
 
 ## Upstream fixes absorbed in 0.9.0
 
@@ -84,7 +88,12 @@ engine's capped `dt`.
   in release builds (v0.1.0/v0.1.1 shipped broken).
 - `src/text/run-cache.ts` — `fallbackPieces()` splits text by which chain
   face covers it (harfbuzz `.notdef` detection, RTL-aware `missingRanges`);
-  `getChunk()` prefers CBDT color bitmaps when present.
+  `getChunk()` prefers CBDT color bitmaps when present. `FaceDef.data` is
+  dropped at registration (harfbuzz copies into its WASM heap, ft_shim
+  reads `path`); only faces with real color strikes retain bytes inside
+  their `CbdtFont` (~50 MB of system Noto faces freed).
+- `src/text/color.ts` — memoized `hex`/`withAlpha`; surfaces call these
+  per-frame, don't add per-file copies.
 - `src/text/cbdt.ts` — NotoColorEmoji CBDT/CBLC parser (format-17 records:
   metrics 5B + dataSize 4B + PNG).
 - `src/text/image-decode.ts` — FFI wrapper for `image_shim_decode`.

@@ -9,7 +9,7 @@ import type { Rgba } from "../text/gpu-text";
 import type { WbContent, WbItem } from "./model";
 import { wbFontSize } from "./model";
 import {
-  frameOf, frameCenter, resolvedPoints, textFrame, rot,
+  frameOf, frameCenter, resolvedPoints, textFrame, rot, curveThrough,
   type Frame, type MeasureFn,
 } from "./geometry";
 import { STROKE_COLORS, FILL_COLORS, STICKY_COLORS, textLayout, mdParseLine, mdWrapLine } from "./draw";
@@ -190,7 +190,7 @@ export function itemSvg(it: WbItem, items: WbItem[], measure: MeasureFn,
     }
     case "line":
     case "arrow": {
-      const pts = resolvedPoints(it, items, measure);
+      const pts = it.round ? curveThrough(resolvedPoints(it, items, measure)) : resolvedPoints(it, items, measure);
       const pp: string[] = [];
       for (let i = 0; i + 1 < pts.length; i += 2) pp.push(`${n(pts[i]!)},${n(pts[i + 1]!)}`);
       let s = `<polyline points="${pp.join(" ")}" fill="none" ${st}${tr}/>`;

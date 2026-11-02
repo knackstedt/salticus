@@ -71,7 +71,11 @@ export class RunCache {
   private imgDec = new ImageDecoder();
   private cbdtFaces = new Map<string, CbdtFont | null>();
   private cbdtGlyphs = new Map<string, { data: Uint8Array; width: number; height: number } | null>();
-  private faces = new Map<string, FaceDef>();
+  // Raw `FaceDef.data` is NOT retained: harfbuzzjs copies font bytes into
+  // WASM at HbBlob construction and ft_shim reads from `path`, so the only
+  // live consumer is the CBDT parser — which runs eagerly at registration
+  // and keeps its own reference when the font actually has color bitmaps.
+  private faces = new Map<string, { path: string; rasterScale?: number }>();
   private handles = new Map<string, bigint>();
   private baselines = new Map<string, number>();
   private runs = new Map<string, RunShape>();
@@ -91,8 +95,9 @@ export class RunCache {
   }
 
   registerFace(def: FaceDef): void {
-    this.faces.set(def.key, def);
     this.shaper.addFace(def.key, def.data);
+    this.cbdtFaces.set(def.key, CbdtFont.parse(def.data));
+    this.faces.set(def.key, { path: def.path, rasterScale: def.rasterScale });
   }
 
   hasFace(key: string): boolean {
@@ -351,10 +356,6 @@ export class RunCache {
   /** Parsed CBDT tables for `face` — null when the font has no color bitmap
    *  strike. */
   private cbdtFor(face: string): CbdtFont | null {
-    if (!this.cbdtFaces.has(face)) {
-      const def = this.faces.get(face);
-      this.cbdtFaces.set(face, def ? CbdtFont.parse(def.data) : null);
-    }
     return this.cbdtFaces.get(face) ?? null;
   }
 
