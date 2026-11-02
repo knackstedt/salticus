@@ -305,11 +305,16 @@ export class WhiteboardSurface implements ScreenUiCompositor {
     return (sy - this.rect.y) / this.wb.cam.zoom + this.wb.cam.y;
   }
   private painter(): WbPainter {
+    const z = this.wb.cam.zoom;
     return new WbPainter({
       pass: this.pass, cache: this.cache, atlas: this.atlas,
       theme: tokens(store.getState().theme),
       images: (a) => this.imgCache?.getRegion(a) ?? null,
-      w2sX: (x) => this.w2sX(x), w2sY: (y) => this.w2sY(y), zoom: this.wb.cam.zoom,
+      w2sX: (x) => this.w2sX(x), w2sY: (y) => this.w2sY(y), zoom: z,
+      // Visible world rect (+ the same 40px margin as the item cull) — lets
+      // hachure bound its sweep to on-screen lines.
+      view: { x: this.wb.cam.x - 40, y: this.wb.cam.y - 40,
+        w: this.rect.w / z + 80, h: this.rect.h / z + 80 },
     });
   }
   private get measure() {

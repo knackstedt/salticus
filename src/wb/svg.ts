@@ -10,6 +10,7 @@ import type { WbContent, WbItem } from "./model";
 import { wbFontSize } from "./model";
 import {
   frameOf, frameCenter, resolvedPoints, textFrame, rot, curveThrough,
+  rectRadius,
   type Frame, type MeasureFn,
 } from "./geometry";
 import { STROKE_COLORS, FILL_COLORS, STICKY_COLORS, textLayout, mdParseLine, mdWrapLine } from "./draw";
@@ -175,7 +176,7 @@ export function itemSvg(it: WbItem, items: WbItem[], measure: MeasureFn,
       return `<polyline points="${pp.join(" ")}" fill="none" ${st}${tr}/>`;
     }
     case "rect": {
-      const rx = it.round ? Math.min(f.w, f.h) * 0.16 : 0;
+      const rx = rectRadius(it, f);
       return `<rect x="${n(f.x)}" y="${n(f.y)}" width="${n(f.w)}" height="${n(f.h)}" rx="${n(rx)}" ${fillSvg(it, f)} ${st}${tr}/>`
         + textLinesSvg(it, f);
     }

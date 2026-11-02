@@ -16,6 +16,7 @@ import type { ThemeTokens } from "../app/theme";
 import { wbFontSize, type WbItem } from "./model";
 import {
   frameOf, frameCenter, resolvedPoints, faceFor, LINE_H, curveThrough,
+  rectRadius, roundRectSdf, unrot,
   type MeasureFn, type Frame,
 } from "./geometry";
 
@@ -242,6 +243,9 @@ export interface PainterOpts {
   w2sX: (x: number) => number;
   w2sY: (y: number) => number;
   zoom: number;
+  /** Visible world rect (with margin) — hachure clips its sweep to it so
+   *  huge shapes don't emit thousands of offscreen hatch lines. */
+  view?: Frame;
 }
 
 export class WbPainter {
@@ -253,6 +257,7 @@ export class WbPainter {
   private w2sX: (x: number) => number;
   private w2sY: (y: number) => number;
   private images?: (asset: string) => { region: AtlasRegion; atlas: TextAtlas } | null;
+  private view?: Frame;
 
   constructor(o: PainterOpts) {
     this.pass = o.pass;
@@ -263,6 +268,7 @@ export class WbPainter {
     this.w2sX = o.w2sX;
     this.w2sY = o.w2sY;
     this.images = o.images;
+    this.view = o.view;
   }
 
   s(wx: number, wy: number): [number, number] {
@@ -435,8 +441,9 @@ export class WbPainter {
   }
 
   /** Clip a diagonal hatch line to a shape; returns clipped segment in
-   *  screen px or null. Line given as parametric point + unit dir. */
-  private hatchSeg(kind: WbItem["kind"], f: Frame, px: number, py: number,
+   *  world coords or null. Line given as parametric point + unit dir.
+   *  `rad` is the rounded-corner radius for rect kinds. */
+  private hatchSeg(kind: WbItem["kind"], f: Frame, rad: number, px: number, py: number,
     ux: number, uy: number): [number, number, number, number] | null {
     // inside() in local frame, same tests as geometry.outlineHit.
     const cx = f.x + f.w / 2, cy = f.y + f.h / 2;
@@ -449,6 +456,7 @@ export class WbPainter {
       if (kind === "diamond") {
         return Math.abs((x - cx) / rx) + Math.abs((y - cy) / ry) - 1;
       }
+      if (rad > 0) return roundRectSdf(x, y, f, rad);
       const u = Math.abs((x - cx) / rx) - 1, v = Math.abs((y - cy) / ry) - 1;
       return Math.max(u, v);
     };
@@ -483,20 +491,52 @@ export class WbPainter {
   }
 
   /** Hachure fill — clipped diagonal strokes. angle in radians. */
-  hachure(kind: WbItem["kind"], f: Frame, seed: string, color: Rgba,
+  hachure(it: WbItem, f: Frame, seed: string, color: Rgba,
     cross: boolean, lw: number, roughness: number): void {
-    const rnd = mulberry32(hash32(seed) + 97);
-    const spacing = Math.max(5, 7 * this.zoom) * 1.2;
+    const kind = it.kind;
+    const rad = rectRadius(it, f);
+    // ~8 px on screen at every zoom. Spacing is the sweep's WORLD-unit step,
+    // so it must grow as zoom shrinks — the old max(5, 7·z) step went the
+    // wrong way (mud zoomed out, sparse zoomed in) and let a big box emit
+    // thousands of lines.
+    const spacing = Math.max(1.5, 8.4 / this.zoom);
+    const cx = f.x + f.w / 2, cy = f.y + f.h / 2;
+    const ext = Math.hypot(f.w, f.h) / 2 + spacing;
+    const jitter = roughness > 0 ? 2.2 : 0;
     (cross ? [Math.PI / 4, -Math.PI / 4] : [Math.PI / 4]).forEach(ang => {
       const ux = Math.cos(ang), uy = Math.sin(ang);
       const nx = -uy, ny = ux;
-      // Sweep the hatch line along the normal across the bbox.
-      const cx = f.x + f.w / 2, cy = f.y + f.h / 2;
-      const ext = Math.hypot(f.w, f.h) / 2 + spacing;
-      for (let d = -ext; d <= ext; d += spacing) {
-        const px = cx + nx * d + (rnd() - 0.5) * (roughness > 0 ? 2.2 : 0);
-        const py = cy + ny * d + (rnd() - 0.5) * (roughness > 0 ? 2.2 : 0);
-        const seg = this.hatchSeg(kind, f, px, py, ux, uy);
+      // Clamp the sweep to lines that can reach the visible world rect.
+      // Hatch lines are emitted in the item's unrotated local frame (the
+      // pass rotates quads), so view corners un-rotate about the center.
+      let lo = -ext, hi = ext;
+      const v = this.view;
+      if (v) {
+        let a = Infinity, b = -Infinity;
+        for (let i = 0; i < 4; i++) {
+          let vx = i & 1 ? v.x + v.w : v.x;
+          let vy = i & 2 ? v.y + v.h : v.y;
+          if (it.angle) {
+            const p = unrot(vx, vy, cx, cy, it.angle);
+            vx = p.x; vy = p.y;
+          }
+          const d = (vx - cx) * nx + (vy - cy) * ny;
+          if (d < a) a = d;
+          if (d > b) b = d;
+        }
+        const m = spacing + 3; // jitter + line-width slop
+        lo = Math.max(lo, a - m); hi = Math.min(hi, b + m);
+      }
+      // Same lattice as an unclamped sweep (d = -ext + k·spacing) — skipped
+      // lines keep their seeded jitter, so panning doesn't shift the fill.
+      const k0 = Math.ceil((lo + ext) / spacing - 1e-6);
+      const k1 = Math.min(Math.floor((hi + ext) / spacing + 1e-6), k0 + 4000);
+      for (let k = k0; k <= k1; k++) {
+        const d = -ext + k * spacing;
+        const jr = mulberry32(hash32(seed) + 97 + k * 747796405 + (ang < 0 ? 31337 : 0));
+        const px = cx + nx * d + (jr() - 0.5) * jitter;
+        const py = cy + ny * d + (jr() - 0.5) * jitter;
+        const seg = this.hatchSeg(kind, f, rad, px, py, ux, uy);
         if (!seg) continue;
         const [x0, y0] = this.s(seg[0], seg[1]);
         const [x1, y1] = this.s(seg[2], seg[3]);
@@ -573,13 +613,13 @@ export class WbPainter {
         const w = f.w * z, h = f.h * z;
         // Corner radius in WORLD units — rectCorners applies zoom itself, so
         // the stroke outline and the fill round the same amount at every zoom.
-        const radW = it.round ? Math.min(f.w, f.h) * 0.16 : 0;
+        const radW = rectRadius(it, f);
         const radS = radW * z;
         if (fillCA) {
           if (it.fillStyle === "solid") {
             if (radS > 1) p.roundedRect(sx, sy, w, h, radS, fillCA); else p.rect(sx, sy, w, h, fillCA);
           } else {
-            this.hachure("rect", f, it.id, withAlpha(fillCA, 0.8), it.fillStyle === "cross", lw * 0.6, it.roughness);
+            this.hachure(it, f, it.id, withAlpha(fillCA, 0.8), it.fillStyle === "cross", lw * 0.6, it.roughness);
           }
         }
         const corners = rectCorners(f, radW, this);
@@ -593,7 +633,7 @@ export class WbPainter {
         const corners = [sx + w / 2, sy, sx + w, sy + h / 2, sx + w / 2, sy + h, sx, sy + h / 2];
         if (fillCA) {
           if (it.fillStyle === "solid") this.fillPoly(corners, fillCA);
-          else this.hachure("diamond", f, it.id, withAlpha(fillCA, 0.8), it.fillStyle === "cross", lw * 0.6, it.roughness);
+          else this.hachure(it, f, it.id, withAlpha(fillCA, 0.8), it.fillStyle === "cross", lw * 0.6, it.roughness);
         }
         this.roughStroke(corners, it.id, true, lw, strokeC, it.roughness, dashPat);
         this.boundText(it, opts, c);
@@ -604,7 +644,7 @@ export class WbPainter {
         const w = f.w * z, h = f.h * z;
         if (fillCA) {
           if (it.fillStyle === "solid") p.ellipse(sx, sy, w, h, fillCA);
-          else this.hachure("ellipse", f, it.id, withAlpha(fillCA, 0.8), it.fillStyle === "cross", lw * 0.6, it.roughness);
+          else this.hachure(it, f, it.id, withAlpha(fillCA, 0.8), it.fillStyle === "cross", lw * 0.6, it.roughness);
         }
         const n = 30;
         const ring: number[] = [];
@@ -840,7 +880,9 @@ function rectCorners(f: Frame, radWorld: number, pt: WbPainter): number[] {
   const [x1, y1] = pt.s(f.x + f.w, f.y + f.h);
   const r = Math.min(radWorld * pt.zoom, Math.abs(x1 - x0) / 2, Math.abs(y1 - y0) / 2);
   if (r < 1.5) return [x0, y0, x1, y0, x1, y1, x0, y1];
-  const n = 3;
+  // Chords per quarter-arc — scale with radius so big corners read as smooth
+  // curves instead of a fixed 3-chord polygon.
+  const n = Math.max(4, Math.min(20, Math.ceil(r / 9)));
   const out: number[] = [];
   const arc = (cx: number, cy: number, a0: number, a1: number) => {
     for (let i = 0; i <= n; i++) {

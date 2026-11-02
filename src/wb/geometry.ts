@@ -106,6 +106,20 @@ export function worldAABB(it: WbItem, measure: MeasureFn): Frame {
   return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
 }
 
+/** Rounded-corner radius (world px) for a rect item; 0 when sharp or n/a. */
+export function rectRadius(it: WbItem, f: Frame): number {
+  return it.kind === "rect" && it.round ? Math.min(f.w, f.h) * 0.16 : 0;
+}
+
+/** Signed distance to a rounded rect's edge (≤0 inside) — the same SDF the
+ *  GPU shader uses, so hit tests and hatch clipping agree with the pixels. */
+export function roundRectSdf(x: number, y: number, f: Frame, rad: number): number {
+  const cx = f.x + f.w / 2, cy = f.y + f.h / 2;
+  const qx = Math.abs(x - cx) - (f.w / 2 - rad);
+  const qy = Math.abs(y - cy) - (f.h / 2 - rad);
+  return Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - rad;
+}
+
 export function combineAABBs(frames: Frame[]): Frame {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   frames.forEach(f => {
@@ -143,7 +157,10 @@ function outlineHit(it: WbItem, f: Frame, a: Pt, b: Pt): Pt | null {
     if (it.kind === "diamond") {
       return Math.abs((p.x - cx) / rx) + Math.abs((p.y - cy) / ry) - 1;
     }
-    // rect + fallbacks: box test
+    // rect + fallbacks: box test (rounded-rect SDF when corners are cut, so
+    // bound arrows stop on the curved edge instead of past it).
+    const rad = rectRadius(it, f);
+    if (rad > 0) return roundRectSdf(p.x, p.y, f, rad);
     const u = Math.abs((p.x - cx) / rx) - 1, v = Math.abs((p.y - cy) / ry) - 1;
     return Math.max(u, v);
   };
@@ -257,8 +274,11 @@ export function hitItem(it: WbItem, wx: number, wy: number, tol: number,
       if (d <= 1) return true;
       return Math.abs(d - 1) * Math.min(rx, ry) <= tol + it.size;
     }
-    case "rect":
+    case "rect": {
+      const rad = rectRadius(it, f);
+      if (rad > 0) return roundRectSdf(p.x, p.y, f, rad) <= tol + it.size;
       return p.x >= f.x - tol && p.x <= f.x + f.w + tol && p.y >= f.y - tol && p.y <= f.y + f.h + tol;
+    }
     default:
       return p.x >= f.x - tol && p.x <= f.x + f.w + tol && p.y >= f.y - tol && p.y <= f.y + f.h + tol;
   }
@@ -283,6 +303,25 @@ export function itemSegments(it: WbItem, items: WbItem[], measure: MeasureFn): n
   if (it.kind === "diamond") {
     const cx = f.x + f.w / 2, cy = f.y + f.h / 2;
     return [cx, f.y, f.x + f.w, cy, cx, f.y + f.h, f.x, cy, cx, f.y];
+  }
+  const rad = rectRadius(it, f);
+  if (rad > 0) {
+    // Rounded rect outline as a world-space arc polyline — the eraser's
+    // segment test then tracks the curved edge.
+    const r = Math.min(rad, f.w / 2, f.h / 2);
+    const n = 4, out: number[] = [];
+    const arc = (cx: number, cy: number, a0: number, a1: number) => {
+      for (let i = 0; i <= n; i++) {
+        const a = a0 + (a1 - a0) * (i / n);
+        out.push(cx + Math.cos(a) * r, cy + Math.sin(a) * r);
+      }
+    };
+    arc(f.x + f.w - r, f.y + r, -Math.PI / 2, 0);
+    arc(f.x + f.w - r, f.y + f.h - r, 0, Math.PI / 2);
+    arc(f.x + r, f.y + f.h - r, Math.PI / 2, Math.PI);
+    arc(f.x + r, f.y + r, Math.PI, Math.PI * 1.5);
+    out.push(out[0]!, out[1]!);
+    return out;
   }
   return [f.x, f.y, f.x + f.w, f.y, f.x + f.w, f.y + f.h, f.x, f.y + f.h, f.x, f.y];
 }
