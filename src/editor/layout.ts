@@ -71,7 +71,7 @@ const LINE_SPACING = 1.25;   // × (ascent + descent)
 const CODE_SPACING = 1.38;
 const BLOCK_GAP = 10;        // px between blocks
 const H_GAP = 8;             // extra gap around headings
-const INDENT = 26;           // list/quote indent
+export const INDENT = 26;           // list/quote indent
 
 interface Token {
   spanIdx: number;

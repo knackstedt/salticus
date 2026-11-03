@@ -19,7 +19,7 @@ import type { ScreenUiCompositor, RendererModuleContext } from "@downdraft/engin
 import { GpuTextPass, type Rgba } from "../text/gpu-text";
 import { TextAtlas } from "../text/atlas";
 import { RunCache } from "../text/run-cache";
-import { DocLayouter, type DocLayout, type EditorTheme, type LaidLine, type LaidSegment } from "./layout";
+import { DocLayouter, INDENT, type DocLayout, type EditorTheme, type LaidLine, type LaidSegment } from "./layout";
 import { docCompare, blockText, newBlockId, spliceSpans, takeSpansFrom, type Block, type BlockKind, type Doc, type DocPos, type TextStyle } from "./model";
 import { itemToBlock, markdownToItems, mergeBlocksAtCaret, parseMarkdownBlocks, serializeBlocks, serializeFragment } from "./clipmd";
 import { htmlToMarkdown } from "./htmlmd";
@@ -1948,7 +1948,7 @@ export class EditorSurface implements ScreenUiCompositor {
       } else if (block.kind === "callout") {
         p.roundedRect(this.rect.x + 8, by - 4, this.rect.w - 16, lb.height + 8, 8, t.calloutBg);
       } else if (block.kind === "quote") {
-        p.roundedRect(ox - 20, by + 4, 3, lb.height - 8, 1.5, t.quoteBar);
+        p.roundedRect(ox + INDENT - 14, by + 4, 3, lb.height - 8, 1.5, t.quoteBar);
       }
       // Block drag — tint the source block so it reads as "picked up".
       if (this.blockDrag && this.blockDrag.src === lb.block) {
@@ -2003,7 +2003,7 @@ export class EditorSurface implements ScreenUiCompositor {
           p.rect(ox, ly + line.height / 2 - 0.5, this.rect.w - PAD_X * 2, 1, t.divider);
           break;
         case "bullet":
-          p.roundedRect(ox - 17, line.baseline + oy - 3, 6, 6, 3, t.bulletColor);
+          if (line.blockFirst) p.roundedRect(ox + INDENT - 17, line.baseline + oy - 3, 6, 6, 3, t.bulletColor);
           break;
         case "number":
           this.drawMarker(line.block, line, ox, oy, p);
@@ -2131,7 +2131,7 @@ export class EditorSurface implements ScreenUiCompositor {
     const label = `${block.num ?? 1}.`;
     const chunk = this.cache.getChunk("inter:400:normal", 16, label);
     if (chunk?.region) {
-      p.text(ox - 22 - chunk.w, line.baseline + oy - chunk.baselineInBitmap,
+      p.text(ox + INDENT - 9 - chunk.w, line.baseline + oy - chunk.baselineInBitmap,
         chunk.w, chunk.h, { region: chunk.region, atlasSize: this.atlas.size }, this.theme.bulletColor);
     }
   }
@@ -2140,7 +2140,7 @@ export class EditorSurface implements ScreenUiCompositor {
     ox: number, oy: number, p: GpuTextPass, t: EditorTheme): void {
     if (!line.blockFirst) return;
     const s = 14;
-    const x = ox - 24;
+    const x = ox + INDENT - 22;
     const y = oy + line.baseline - s / 2 - 2;
     // Fresh toggle → pop the box + scale the check in.
     const anim = this.animationsOn && this.todoAnim && this.todoAnim.block === block.id
