@@ -36,6 +36,25 @@
 
 - TypeScript everywhere; avoid `for..of` and `while` loops (use `.forEach`
   or indexed `for`).
+- Clipboard is plain-text only — rich copy/paste travels as markdown via
+  `src/editor/clipmd.ts` (serializer + recursive inline parser + gated
+  block parser + `mergeBlocksAtCaret`, shared by the internal-clip path and
+  `scripts/import-stackedit.ts`). Covered: all block kinds (`> [!x]` =
+  callout, tables → codeblock), inline `**`/`__` `*`/`_` `***` `~~` `` ` ``,
+  `<u>` + basic HTML tags, `[t](u)` links, `![i](u)` images, autolinks,
+  backslash escapes, `&entities;`. Interior slices of a single block export
+  marks only (no block marker). `markdownToItems` is the paste gate —
+  returns null when the parse equals verbatim prose. Tests:
+  `tests/unit/clipmd.test.ts` (`bun test`).
+- The native clipboard (arboard) only reaches the X11 selection; on
+  Wayland sessions without X11↔Wayland bridging, copies in Wayland apps
+  are invisible to it. `src/app/clipboard.ts` mirrors writes to both
+  (`wl-copy`) and prefers the Wayland side on reads (`wl-paste`) when the
+  wl-clipboard tools exist — all clipboard reads/writes must go through
+  it, not `__nativeWindow` directly. `clipboardGetRich` also returns any
+  `text/html` sibling offer: `src/editor/htmlmd.ts` converts it to
+  markdown so pastes from other apps restore real formatting (the
+  plain-text sibling alone is already stripped).
 - No Devin co-author trailer in commits.
 - Store updates are immutable — subscribers should compare slice
   references, never `JSON.stringify` per notification. `searchPages` uses

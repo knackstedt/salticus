@@ -20,13 +20,16 @@ import { GpuTextPass, type Rgba } from "../text/gpu-text";
 import { TextAtlas } from "../text/atlas";
 import { RunCache } from "../text/run-cache";
 import { DocLayouter, type DocLayout, type EditorTheme, type LaidLine, type LaidSegment } from "./layout";
-import { docCompare, blockText, newBlockId, type Block, type BlockKind, type Doc, type DocPos, type Span, type TextStyle } from "./model";
+import { docCompare, blockText, newBlockId, spliceSpans, takeSpansFrom, type Block, type BlockKind, type Doc, type DocPos, type TextStyle } from "./model";
+import { itemToBlock, markdownToItems, mergeBlocksAtCaret, parseMarkdownBlocks, serializeBlocks, serializeFragment } from "./clipmd";
+import { htmlToMarkdown } from "./htmlmd";
 import { History } from "./history";
 import { matchBlockShortcut, matchInlineShortcut, inlineMarkerLen, stripBlockPrefix, styleRange } from "./markdown";
 import { darkSyntax, lightSyntax } from "./highlight";
 import { wikiLinkAt } from "./links";
 import { store } from "../app/store";
 import { openPageByTitle } from "../app/actions";
+import { clipboardGetRich, clipboardSet } from "../app/clipboard";
 import { createLogger } from "@downdraft/engine/util/logger";
 
 const log = createLogger();
@@ -1052,7 +1055,7 @@ export class EditorSurface implements ScreenUiCompositor {
       if (ps) styleRange(b, start, start + text.length, ps);
     };
     if (b.spans.length === 0) {
-      b.spans.push({ text, style: { family: "inter", weight: 400, italic: false, sizePx: 16 } });
+      b.spans.push({ text, style: { ...FALLBACK_STYLE } });
       applyPending(0);
       this.caret = { block: this.caret.block, offset: text.length };
       return;
@@ -1441,23 +1444,6 @@ export class EditorSurface implements ScreenUiCompositor {
    *  the OS clipboard still holds the text we exported. */
   private internalClip: { text: string; blocks: Block[] } | null = null;
 
-  private clipboardText(): string {
-    if (this.anchor === null) return "";
-    const a = docCompare(this.anchor, this.caret) <= 0 ? this.anchor : this.caret;
-    const b = docCompare(this.anchor, this.caret) <= 0 ? this.caret : this.anchor;
-    if (a.block === b.block) {
-      return blockText(this.doc.blocks[a.block]!).slice(a.offset, b.offset);
-    }
-    const parts: string[] = [];
-    for (let i = a.block; i <= b.block; i++) {
-      const blk = this.doc.blocks[i]!;
-      const s = i === a.block ? a.offset : 0;
-      const e = i === b.block ? b.offset : blockText(blk).length;
-      parts.push(blockText(blk).slice(s, e));
-    }
-    return parts.join("\n");
-  }
-
   /** Deep-copy of the selected block range — first/last blocks sliced at the
    *  anchor/caret offsets, middle blocks whole. */
   private sliceSelection(): Block[] {
@@ -1476,34 +1462,28 @@ export class EditorSurface implements ScreenUiCompositor {
     return out;
   }
 
-  /** Splice styled spans into a block at a text offset. */
-  private insertSpansAt(b: Block, off: number, spans: Span[]): void {
-    const tail = takeSpansFrom(b, off);
-    b.spans.push(...spans, ...tail);
-  }
-
-  private clipboardSet(text: string): void {
-    const nw = (globalThis as { __nativeWindow?: { setClipboardText?: (t: string) => void } }).__nativeWindow;
-    try { nw?.setClipboardText?.(text); } catch (e) { log.warn("editor", `clipboard set failed: ${e}`); }
-  }
-
-  private clipboardGet(): string {
-    const nw = (globalThis as { __nativeWindow?: { getClipboardText?: () => string } }).__nativeWindow;
-    try { return nw?.getClipboardText?.() ?? ""; } catch { return ""; }
-  }
-
   private copy(cut: boolean): void {
     if (this.anchor === null) return;
-    const text = this.clipboardText();
-    this.clipboardSet(text);
-    this.internalClip = { text, blocks: this.sliceSelection() };
+    const a = docCompare(this.anchor, this.caret) <= 0 ? this.anchor : this.caret;
+    const b = docCompare(this.anchor, this.caret) <= 0 ? this.caret : this.anchor;
+    const blocks = this.sliceSelection();
+    // The OS clipboard is plain-text only, so rich content travels as
+    // markdown (see clipmd.ts). Interior slices of a single block export
+    // inline marks only — a copied phrase shouldn't carry its block's
+    // list/heading marker.
+    const whole = a.block !== b.block ||
+      (a.offset === 0 && b.offset === blockText(this.doc.blocks[b.block]!).length);
+    const text = whole ? serializeBlocks(blocks) : serializeFragment(blocks[0]!.spans);
+    clipboardSet(text);
+    this.internalClip = { text, blocks };
     if (cut) this.deleteSelection();
   }
 
   private paste(plain = false): void {
+    const clip = clipboardGetRich();
     // oxlint-disable-next-line no-control-regex — intentional: strips control chars
-    const text = this.clipboardGet().replace(/\r\n?/g, "\n").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, "");
-    if (!text) return;
+    const text = clip.text.replace(/\r\n?/g, "\n").replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g, "");
+    if (!text && !clip.html) return;
     this.pending = null;
     this.mutate("paste");
     if (this.anchor !== null) this.deleteSelection(false);
@@ -1519,21 +1499,34 @@ export class EditorSurface implements ScreenUiCompositor {
     if (!plain) {
       // Internal clipboard: the OS text still matches what we copied → restore
       // the full structure (block kinds + inline styles) instead of plaintext.
-      const clip = this.internalClip;
-      if (clip && clip.blocks.length > 0 && clip.text === text) {
-        this.pasteStructured(clip.blocks);
+      const ic = this.internalClip;
+      if (ic && ic.blocks.length > 0 && ic.text === text) {
+        this.caret = mergeBlocksAtCaret(this.doc.blocks, this.caret, ic.blocks);
+        this.inserted();
         return;
       }
 
-      // Markdown-looking paste (first line carries a block marker) → typed
-      // blocks. Otherwise plain paragraph paste.
-      const md = parseMarkdownLines(text);
-      if (md) {
-        this.pasteBlocks(md);
+      // A text/html offer is authoritative rich content — convert to
+      // markdown and parse it directly. Otherwise fall back to parsing
+      // markdown-looking plain text (plain prose stays literal).
+      const mdFromHtml = clip.html ? htmlToMarkdown(clip.html) : null;
+      const items = mdFromHtml ? parseMarkdownBlocks(mdFromHtml)
+        : text && cur ? markdownToItems(text) : null;
+      if (items && items.length > 0) {
+        const base: TextStyle = {
+          ...(cur ? this.typingStyle(cur, this.caret.offset) ?? FALLBACK_STYLE : FALLBACK_STYLE),
+          code: undefined,
+          underline: undefined,
+          strikethrough: undefined,
+        };
+        this.caret = mergeBlocksAtCaret(this.doc.blocks, this.caret,
+          items.map(it => itemToBlock(it, base)));
+        this.inserted();
         return;
       }
     }
 
+    if (!text) return;
     const lines = text.split("\n");
     if (lines.length === 1) {
       this.insertRaw(lines[0]!, false);
@@ -1542,9 +1535,7 @@ export class EditorSurface implements ScreenUiCompositor {
       this.insertRaw(lines[0]!, false);
       const b = this.blockOf(this.caret)!;
       const tail = takeSpansFrom(b, this.caret.offset);
-      const baseStyle = b.spans[0]?.style ?? tail[0]?.style ?? {
-        family: "inter" as const, weight: 400, italic: false, sizePx: 16,
-      };
+      const baseStyle = b.spans[0]?.style ?? tail[0]?.style ?? FALLBACK_STYLE;
       const newBlocks: Block[] = lines.slice(1).map((l) => ({
         id: newBlockId(),
         kind: "paragraph" as const,
@@ -1555,107 +1546,6 @@ export class EditorSurface implements ScreenUiCompositor {
       last.spans.push(...tail);
       this.doc.blocks.splice(this.caret.block + 1, 0, ...newBlocks);
       this.caret = { block: this.caret.block + newBlocks.length, offset: lines[lines.length - 1]!.length };
-    }
-    this.inserted();
-  }
-
-  /** Paste structured blocks from the internal clipboard: first block merges
-   *  into the caret block (adopting its kind if the caret block is empty),
-   *  the rest splice in below with kinds/spans intact; the caret's old tail
-   *  follows the last pasted block. */
-  private pasteStructured(blocks: Block[]): void {
-    const b = this.blockOf(this.caret);
-    if (!b) return;
-    const cloneSpans = (ss: Span[]): Span[] => ss.map(s => ({ text: s.text, style: { ...s.style } }));
-    const first = blocks[0]!;
-    const firstLen = blockText(first).length;
-    if (first.kind !== "paragraph" && blockText(b).length === 0) {
-      b.kind = first.kind;
-      b.checked = first.checked;
-      b.num = first.num;
-      b.lang = first.lang;
-      b.spans = cloneSpans(first.spans);
-      this.caret = { block: this.caret.block, offset: firstLen };
-    } else {
-      this.insertSpansAt(b, this.caret.offset, cloneSpans(first.spans));
-      this.caret = { block: this.caret.block, offset: this.caret.offset + firstLen };
-    }
-
-    if (blocks.length > 1) {
-      const tail = takeSpansFrom(b, this.caret.offset);
-      const mid: Block[] = blocks.slice(1).map(src => ({
-        id: newBlockId(), kind: src.kind, spans: cloneSpans(src.spans),
-        lang: src.lang, checked: src.checked, num: src.num,
-      }));
-      const last = mid[mid.length - 1]!;
-      const endOff = blockText(last).length;
-      last.spans.push(...tail);
-      this.doc.blocks.splice(this.caret.block + 1, 0, ...mid);
-      this.caret = { block: this.caret.block + mid.length, offset: endOff };
-    }
-    this.inserted();
-  }
-
-  /** Paste pre-parsed block items: the first item merges into the current
-   *  block (adopting its kind when the current block is an empty paragraph);
-   *  the rest are spliced in below, with the caret's tail on the last one. */
-  private pasteBlocks(items: ParsedBlock[]): void {
-    const b = this.blockOf(this.caret);
-    if (!b) return;
-    const tail = takeSpansFrom(b, this.caret.offset);
-    const baseStyle: TextStyle = b.spans[0]?.style ?? tail[0]?.style ?? {
-      family: "inter", weight: 400, italic: false, sizePx: 16,
-    };
-    const spanOf = (text: string): Span[] =>
-      text ? [{ text, style: { ...baseStyle, code: undefined, underline: undefined, strikethrough: undefined } }] : [];
-
-    const first = items[0]!;
-    if (first.kind !== "paragraph" && blockText(b).length === 0) {
-      // Current block is empty — it becomes the pasted block's kind.
-      b.kind = first.kind;
-      b.checked = first.checked;
-      b.num = first.num;
-      b.lang = first.lang;
-      b.spans = spanOf(first.text);
-      this.caret = { block: this.caret.block, offset: first.text.length };
-    } else {
-      // Merge its text into the current block at the caret.
-      const ins: Span[] = spanOf(first.text);
-      let off = 0;
-      let done = false;
-      for (let i = 0; i < b.spans.length && !done; i++) {
-        const sp = b.spans[i]!;
-        if (this.caret.offset <= off + sp.text.length || i === b.spans.length - 1) {
-          const inner = clamp(this.caret.offset - off, 0, sp.text.length);
-          const head = { text: sp.text.slice(0, inner), style: sp.style };
-          const rest = { text: sp.text.slice(inner), style: sp.style };
-          b.spans.splice(i, 1, ...(head.text ? [head] : []), ...ins, ...(rest.text ? [rest] : []));
-          done = true;
-        }
-        off += sp.text.length;
-      }
-      if (!done) b.spans.push(...ins);
-      this.caret = { block: this.caret.block, offset: this.caret.offset + first.text.length };
-    }
-
-    if (items.length > 1) {
-      const newBlocks: Block[] = items.slice(1).map((it) => ({
-        id: newBlockId(),
-        kind: it.kind,
-        checked: it.checked,
-        num: it.num,
-        lang: it.lang,
-        spans: spanOf(it.text),
-      }));
-      const last = newBlocks[newBlocks.length - 1]!;
-      last.spans.push(...tail);
-      this.doc.blocks.splice(this.caret.block + 1, 0, ...newBlocks);
-      this.caret = {
-        block: this.caret.block + newBlocks.length,
-        offset: items[items.length - 1]!.text.length,
-      };
-    } else {
-      b.spans.push(...tail);
     }
     this.inserted();
   }
@@ -2508,46 +2398,7 @@ export class EditorSurface implements ScreenUiCompositor {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-type SpanLike = Span;
-
-function spliceSpans(b: { spans: SpanLike[] }, off: number, count: number): void {
-  let pos = 0;
-  let remaining = count;
-  const out: SpanLike[] = [];
-  for (const sp of b.spans) {
-    const s0 = pos;
-    const s1 = pos + sp.text.length;
-    if (remaining <= 0 || off >= s1 || off + remaining <= s0) {
-      out.push(sp);
-    } else {
-      const keepStart = Math.max(0, off - s0);
-      const delEnd = Math.min(sp.text.length, off + remaining - s0);
-      const text = sp.text.slice(0, keepStart) + sp.text.slice(delEnd);
-      if (text) out.push({ text, style: sp.style });
-      remaining -= delEnd - keepStart;
-    }
-    pos = s1;
-  }
-  b.spans = out;
-}
-
-function takeSpansFrom(b: { spans: SpanLike[] }, off: number): SpanLike[] {
-  const tail: SpanLike[] = [];
-  let pos = 0;
-  const keep: SpanLike[] = [];
-  for (const sp of b.spans) {
-    const s1 = pos + sp.text.length;
-    if (off >= s1) { keep.push(sp); }
-    else if (off <= pos) { tail.push(sp); }
-    else {
-      keep.push({ text: sp.text.slice(0, off - pos), style: sp.style });
-      tail.push({ text: sp.text.slice(off - pos), style: sp.style });
-    }
-    pos = s1;
-  }
-  b.spans = keep;
-  return tail;
-}
+const FALLBACK_STYLE: TextStyle = { family: "inter", weight: 400, italic: false, sizePx: 16 };
 
 interface FormatDef {
   has: (s: TextStyle) => boolean;
@@ -2603,63 +2454,6 @@ function easeOutCubic(t: number): number {
 function easeOutBack(t: number): number {
   const c = 1.70158;
   return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2);
-}
-
-// ── Markdown paste ──────────────────────────────────────────────────────────
-
-interface ParsedBlock {
-  kind: BlockKind;
-  text: string;
-  checked?: boolean;
-  num?: number;
-  lang?: string;
-}
-
-/** Parse pasted text into typed blocks when it looks like markdown — i.e.
- *  the FIRST line carries a block marker ("# ", "- ", "```", "1. ", "> "…).
- *  Returns null for plain prose so paste stays verbatim. */
-function parseMarkdownLines(text: string): ParsedBlock[] | null {
-  const lines = text.split("\n");
-  for (; lines.length && lines[lines.length - 1] === "";) lines.pop();
-  if (lines.length === 0) return null;
-
-  const itemFor = (line: string): ParsedBlock | null => {
-    let m = line.match(/^(#{1,3})\s+(.*)$/);
-    if (m) return { kind: m[1]!.length === 1 ? "h1" : m[1]!.length === 2 ? "h2" : "h3", text: m[2]! };
-    if ((m = line.match(/^>\s?(.*)$/))) return { kind: "quote", text: m[1]! };
-    if ((m = line.match(/^[-*+]\s+\[([ xX])\]\s+(.*)$/)))
-      return { kind: "todo", text: m[2]!, checked: m[1]!.toLowerCase() === "x" };
-    if ((m = line.match(/^[-*+•]\s+(.*)$/))) return { kind: "bullet", text: m[1]! };
-    if ((m = line.match(/^(\d{1,9})[.)]\s+(.*)$/))) return { kind: "number", text: m[2]!, num: parseInt(m[1]!, 10) || 1 };
-    if (/^(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) return { kind: "divider", text: "" };
-    return null;
-  };
-
-  // Require a marker on the first line — markdown conversion is opt-in by
-  // shape, so pasting regular prose never restructures blocks.
-  if (!itemFor(lines[0]!) && !lines[0]!.startsWith("```")) return null;
-
-  const items: ParsedBlock[] = [];
-  for (let i = 0; i < lines.length;) {
-    const line = lines[i]!;
-    const fence = line.match(/^```(\w*)\s*$/);
-    if (fence) {
-      const body: string[] = [];
-      i++;
-      for (; i < lines.length && !/^```\s*$/.test(lines[i]!);) body.push(lines[i++]!);
-      i++; // consume closing fence (or run off the end)
-      items.push({ kind: "codeblock", text: body.join("\n"), lang: fence[1] || "ts" });
-      continue;
-    }
-    const it = itemFor(line) ?? { kind: "paragraph", text: line };
-    // Consecutive ">" lines are one blockquote — merge into a single
-    // multiline quote block rather than one block per line.
-    const prev = items[items.length - 1];
-    if (it.kind === "quote" && prev?.kind === "quote") prev.text += "\n" + it.text;
-    else items.push(it);
-    i++;
-  }
-  return items.length ? items : null;
 }
 
 export function darkTheme(): EditorTheme {

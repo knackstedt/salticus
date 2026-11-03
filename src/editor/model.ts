@@ -69,6 +69,47 @@ export function newBlockId(): string {
   return `b${(nextId++).toString(36)}${Date.now().toString(36).slice(-4)}`;
 }
 
+/** Remove `count` utf16 units of text starting at `off` from a block's spans. */
+export function spliceSpans(b: { spans: Span[] }, off: number, count: number): void {
+  let pos = 0;
+  let remaining = count;
+  const out: Span[] = [];
+  for (const sp of b.spans) {
+    const s0 = pos;
+    const s1 = pos + sp.text.length;
+    if (remaining <= 0 || off >= s1 || off + remaining <= s0) {
+      out.push(sp);
+    } else {
+      const keepStart = Math.max(0, off - s0);
+      const delEnd = Math.min(sp.text.length, off + remaining - s0);
+      const text = sp.text.slice(0, keepStart) + sp.text.slice(delEnd);
+      if (text) out.push({ text, style: sp.style });
+      remaining -= delEnd - keepStart;
+    }
+    pos = s1;
+  }
+  b.spans = out;
+}
+
+/** Split spans at `off`: the block keeps the head, the tail is returned. */
+export function takeSpansFrom(b: { spans: Span[] }, off: number): Span[] {
+  const tail: Span[] = [];
+  let pos = 0;
+  const keep: Span[] = [];
+  for (const sp of b.spans) {
+    const s1 = pos + sp.text.length;
+    if (off >= s1) { keep.push(sp); }
+    else if (off <= pos) { tail.push(sp); }
+    else {
+      keep.push({ text: sp.text.slice(0, off - pos), style: sp.style });
+      tail.push({ text: sp.text.slice(off - pos), style: sp.style });
+    }
+    pos = s1;
+  }
+  b.spans = keep;
+  return tail;
+}
+
 /** Default style for a block kind (base — theme colors applied by caller). */
 export function blockBaseStyle(kind: BlockKind): Pick<TextStyle, "sizePx" | "weight" | "family"> {
   switch (kind) {

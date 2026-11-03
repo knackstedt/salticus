@@ -37,6 +37,7 @@ import {
 import { wbSvg, wbBounds } from "./svg";
 import { WbImageCache, loadAssetBase64 } from "./assets";
 import { cropRgba, pdfFromRgba } from "./raster";
+import { clipboardGet, clipboardSet } from "../app/clipboard";
 import { encodePNG } from "@downdraft/platform-native";
 import { getNativeHost } from "@downdraft/engine";
 import { downdraft } from "@downdraft/engine/app/main";
@@ -1432,13 +1433,11 @@ export class WhiteboardSurface implements ScreenUiCompositor {
   }
 
   private clipSet(text: string): void {
-    const nw = (globalThis as { __nativeWindow?: { setClipboardText?: (t: string) => void } }).__nativeWindow;
-    try { nw?.setClipboardText?.(text); } catch { /* no system clipboard */ }
+    clipboardSet(text);
   }
 
   private clipGet(): string {
-    const nw = (globalThis as { __nativeWindow?: { getClipboardText?: () => string } }).__nativeWindow;
-    try { return nw?.getClipboardText?.() ?? ""; } catch { return ""; }
+    return clipboardGet();
   }
 
   private moveCaretTo(idx: number, extend: boolean): void {

@@ -35,7 +35,8 @@ import { basename, dirname, join } from "node:path";
 import sharp from "sharp";
 
 import { newId } from "../src/app/store";
-import { newBlockId, type Block, type BlockKind, type Doc, type Span, type TextStyle } from "../src/editor/model";
+import { newBlockId, type Block, type Doc, type TextStyle } from "../src/editor/model";
+import { parseMarkdownBlocks } from "../src/editor/clipmd";
 import { normalizeWbItem, type WbArrowhead, type WbContent, type WbFont, type WbItem } from "../src/wb/model";
 
 // ── args ────────────────────────────────────────────────────────────────────
@@ -187,108 +188,30 @@ function scanLibrary(root: string): { items: Item[]; present: Set<string>; trash
 // ── markdown → doc ──────────────────────────────────────────────────────────
 
 const BASE: TextStyle = { family: "inter", weight: 400, italic: false, sizePx: 16 };
-const MUTED: TextStyle = { ...BASE, color: [0.55, 0.55, 0.55, 1] };
 
-const INLINE_RE = /(!?\[[^\]]*\]\([^)\n]*\)|\*\*\*[^*\n]+\*\*\*|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_|~~[^~\n]+~~|`[^`\n]+`|<\/?[a-zA-Z][^>\n]*>)/g;
-
-/** Inline markdown → styled spans (single level — no nesting). */
-function spans(text: string): Span[] {
-  const out: Span[] = [];
-  let last = 0;
-  for (const m of text.matchAll(INLINE_RE)) {
-    const i = m.index!;
-    if (i > last) out.push({ text: text.slice(last, i), style: { ...BASE } });
-    const tok = m[0];
-    if (tok.startsWith("![")) {
-      const mm = tok.match(/!\[([^\]]*)\]\(([^)\n]*)\)/)!;
-      out.push({ text: `[image: ${mm[1] || "image"}]`, style: { ...MUTED } });
-      if (mm[2]) out.push({ text: ` (${mm[2]})`, style: { ...MUTED } });
-    } else if (tok.startsWith("[")) {
-      const mm = tok.match(/\[([^\]]*)\]\(([^)\n]*)\)/)!;
-      out.push({ text: mm[1]!, style: { ...BASE, underline: true } });
-      if (mm[2]) out.push({ text: ` (${mm[2]})`, style: { ...MUTED } });
-    } else if (tok.startsWith("***")) {
-      out.push({ text: tok.slice(3, -3), style: { ...BASE, weight: 700, italic: true } });
-    } else if (tok.startsWith("**") || tok.startsWith("__")) {
-      out.push({ text: tok.slice(2, -2), style: { ...BASE, weight: 700 } });
-    } else if (tok.startsWith("*") || tok.startsWith("_")) {
-      out.push({ text: tok.slice(1, -1), style: { ...BASE, italic: true } });
-    } else if (tok.startsWith("~~")) {
-      out.push({ text: tok.slice(2, -2), style: { ...BASE, strikethrough: true } });
-    } else if (tok.startsWith("`")) {
-      out.push({ text: tok.slice(1, -1), style: { ...BASE, code: true } });
-    }
-    // html tags drop
-    last = i + tok.length;
-  }
-  if (last < text.length) out.push({ text: text.slice(last), style: { ...BASE } });
-  return out.length ? out : [{ text: "", style: { ...BASE } }];
-}
-
-function block(kind: BlockKind, text: string, extra: Partial<Block> = {}): Block {
-  return { id: newBlockId(), kind, spans: kind === "codeblock" ? [{ text, style: { ...BASE } }] : spans(text), ...extra };
-}
-
-/** Markdown source → editor Doc. Tables become codeblocks (mono keeps the
- *  grid); constructs the block model can't express degrade to text. */
+/** Markdown source → editor Doc — the shared clipmd parser does the work
+ *  (tables → codeblocks, callouts from > [!x], inline marks → span patches).
+ *  YAML frontmatter is stripped here first. */
 export function mdToDoc(md: string): Doc {
   const lines = md.replace(/\r\n?/g, "\n").split("\n");
-  const blocks: Block[] = [];
   // YAML frontmatter.
-  let i = 0;
+  let start = 0;
   if (lines[0]?.trim() === "---") {
     for (let j = 1; j < lines.length; j++) {
-      if (lines[j]!.trim() === "---") { i = j + 1; break; }
+      if (lines[j]!.trim() === "---") { start = j + 1; break; }
     }
   }
-  for (; i < lines.length;) {
-    const line = lines[i]!;
-    const fence = line.match(/^\s*```(\w*)\s*$/);
-    if (fence) {
-      const body: string[] = [];
-      i++;
-      for (; i < lines.length && !/^\s*```\s*$/.test(lines[i]!);) body.push(lines[i++]!);
-      i++;
-      blocks.push(block("codeblock", body.join("\n"), { lang: fence[1] || "" }));
-      continue;
-    }
-    if (/^\s*\|.*\|\s*$/.test(line)) {
-      const body: string[] = [];
-      for (; i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i]!);) body.push(lines[i++]!);
-      blocks.push(block("codeblock", body.join("\n"), { lang: "" }));
-      continue;
-    }
-    let m: RegExpMatchArray | null;
-    if ((m = line.match(/^\s{0,3}(#{1,6})\s+(.*)$/))) {
-      const lv = Math.min(3, m[1]!.length);
-      blocks.push(block(lv === 1 ? "h1" : lv === 2 ? "h2" : "h3", m[2]!));
-    } else if ((m = line.match(/^\s*>\s?(.*)$/))) {
-      // Consecutive ">" lines form one blockquote — a single quote block
-      // with embedded newlines.
-      const body = [m[1]!];
-      for (; i + 1 < lines.length;) {
-        const nm = lines[i + 1]!.match(/^\s*>\s?(.*)$/);
-        if (!nm) break;
-        body.push(nm[1]!);
-        i++;
-      }
-      blocks.push(block("quote", body.join("\n")));
-    } else if ((m = line.match(/^\s*[-*+]\s+\[([ xX])\]\s+(.*)$/))) {
-      blocks.push(block("todo", m[2]!, { checked: m[1]!.toLowerCase() === "x" }));
-    } else if ((m = line.match(/^\s*[-*+•]\s+(.*)$/))) {
-      blocks.push(block("bullet", m[1]!));
-    } else if ((m = line.match(/^\s*(\d{1,9})[.)]\s+(.*)$/))) {
-      blocks.push(block("number", m[2]!, { num: parseInt(m[1]!, 10) || 1 }));
-    } else if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
-      blocks.push(block("divider", ""));
-    } else if (!line.trim()) {
-      // skip — block spacing already separates content
-    } else {
-      blocks.push(block("paragraph", line));
-    }
-    i++;
+  const blocks: Block[] = parseMarkdownBlocks(lines.slice(start).join("\n")).map(it => ({
+    id: newBlockId(),
+    kind: it.kind,
+    checked: it.checked,
+    num: it.num,
+    lang: it.lang,
+    spans: it.spans.filter(s => s.text).map(s => ({ text: s.text, style: { ...BASE, ...s.patch } })),
+  }));
+  if (!blocks.length) {
+    blocks.push({ id: newBlockId(), kind: "paragraph", spans: [{ text: "", style: { ...BASE } }] });
   }
-  if (!blocks.length) blocks.push(block("paragraph", ""));
   return { blocks };
 }
 

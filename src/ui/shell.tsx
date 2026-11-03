@@ -15,6 +15,7 @@ import { createLogger } from "@downdraft/engine/util/logger";
 import { store } from "../app/store";
 import { activatePage, closeAllTabs, closeOtherTabs, closeTab, createPage, deletePage, destroyPage, duplicatePage, openPage, renamePage, restorePage, toggleExpanded, toggleFavorite } from "../app/actions";
 import { serveThumbs, setThumbUi } from "../app/thumbnails";
+import { clipboardSet } from "../app/clipboard";
 import { chromeCss, tokens, type ThemeTokens } from "../app/theme";
 import { iconBytes } from "./icons";
 import { ctxMenuMarkup, sidebarMarkup, topbarMarkup, type CtxMenuKind } from "./shell-markup";
@@ -69,12 +70,6 @@ async function loadUiFonts(ui: HtmlUiContext): Promise<string> {
 
 function pageCss(t: ThemeTokens, fontFaces: string): string {
   return `<style>${fontFaces}${chromeCss(t)}</style>`;
-}
-
-/** OS clipboard write — same native-window bridge the editor uses. */
-function clipboardSet(text: string): void {
-  const nw = (globalThis as { __nativeWindow?: { setClipboardText?: (t: string) => void } }).__nativeWindow;
-  try { nw?.setClipboardText?.(text); } catch (e) { log.warn("ui", `clipboard set failed: ${e}`); }
 }
 
 export function mountShell(ui: HtmlUiContext, ctx: AppContext): ShellHandles {
