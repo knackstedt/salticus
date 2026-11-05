@@ -9,6 +9,7 @@
 
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { HtmlUiContext, OsrDomEvent, UiPanelHandle } from "@downdraft/engine/modules/html-ui";
 import type { AppContext } from "@downdraft/engine/app/main";
 import { createLogger } from "@downdraft/engine/util/logger";
@@ -42,7 +43,8 @@ function fontDir(): string {
   // Game cwd when launched via `draft dev`/`draft release`.
   const local = join(process.cwd(), "assets", "fonts");
   if (existsSync(local)) return local;
-  return join(new URL("../..", import.meta.url).pathname, "assets", "fonts");
+  // fileURLToPath, not .pathname — the latter yields "/C:/..." on Windows.
+  return fileURLToPath(new URL("../../assets/fonts", import.meta.url));
 }
 
 async function loadUiFonts(ui: HtmlUiContext): Promise<string> {

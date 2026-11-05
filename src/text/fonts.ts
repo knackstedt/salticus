@@ -63,6 +63,7 @@ export function resolveWeight(family: FontFamily, weight: number): number {
 // each fallback in order — wide-coverage text faces first, emoji last since
 // it renders as monochrome silhouettes. First existing candidate path wins;
 // missing faces are skipped entirely.
+const WIN_FONTS = join(process.env.SystemRoot ?? "C:\\Windows", "Fonts");
 export const FALLBACK_FACES: { key: string; candidates: string[] }[] = [
   {
     // Latin-ext, punctuation, currency, arrows, box drawing, combining marks.
@@ -70,6 +71,8 @@ export const FALLBACK_FACES: { key: string; candidates: string[] }[] = [
     candidates: [
       "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
       "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+      join(WIN_FONTS, "segoeui.ttf"),
+      join(WIN_FONTS, "arial.ttf"),
     ],
   },
   {
@@ -79,11 +82,16 @@ export const FALLBACK_FACES: { key: string; candidates: string[] }[] = [
     candidates: [
       "/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf",
       "/usr/share/fonts/truetype/noto/NotoRashiHebrew-Regular.ttf",
+      join(WIN_FONTS, "segoeui.ttf"),
     ],
   },
   {
     key: "noto-naskh:400:normal",
-    candidates: ["/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf"],
+    candidates: [
+      "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf",
+      join(WIN_FONTS, "trado.ttf"),
+      join(WIN_FONTS, "arial.ttf"),
+    ],
   },
   {
     key: "noto-thai:400:normal",
@@ -190,12 +198,19 @@ export const FALLBACK_FACES: { key: string; candidates: string[] }[] = [
       "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
       "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
       "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+      join(WIN_FONTS, "msjh.ttc"),
+      join(WIN_FONTS, "malgun.ttf"),
+      join(WIN_FONTS, "YuGothR.ttc"),
+      join(WIN_FONTS, "simsun.ttc"),
     ],
   },
   {
     // Android's catch-all: CJK Ext-B+, Deseret, and other historic scripts.
     key: "droid-fallback:400:normal",
-    candidates: ["/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf"],
+    candidates: [
+      "/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf",
+      join(WIN_FONTS, "seguisym.ttf"),
+    ],
   },
   {
     key: EMOJI_FACE,
@@ -204,6 +219,7 @@ export const FALLBACK_FACES: { key: string; candidates: string[] }[] = [
       "/usr/share/fonts/noto/NotoColorEmoji.ttf",
       "/usr/share/fonts/opentype/noto/NotoColorEmoji.ttf",
       "/System/Library/Fonts/Apple Color Emoji.ttc",
+      join(WIN_FONTS, "seguiemj.ttf"),
     ],
   },
 ];

@@ -1,6 +1,6 @@
 {
   "name": "salticus",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "type": "module",
   "build": {
     "icon": "assets/icon.png",
@@ -16,13 +16,13 @@
     "test": "npm test"
   },
   "dependencies": {
-    "@downdraft/engine": "^0.9.0",
-    "@downdraft/platform-native": "^0.9.0",
+    "@downdraft/engine": "^0.10.2",
+    "@downdraft/platform-native": "^0.10.2",
     "harfbuzzjs": "^1.6.3",
     "zustand": "^5.0.15"
   },
   "devDependencies": {
-    "@downdraft/cli": "^0.9.0",
+    "@downdraft/cli": "^0.10.2",
     "@types/bun": "^1.4.4",
     "@types/node": "^22.10.0",
     "@webgpu/types": "^0.1.71",
